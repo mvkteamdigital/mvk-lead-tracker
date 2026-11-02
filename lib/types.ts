@@ -1,0 +1,45 @@
+export interface ColumnDef {
+  id: string;
+  name: string;
+  type: "text" | "dropdown" | "number";
+  width: number;
+  headerStyle?: "gold" | "navy" | "default" | "emerald" | "purple" | string;
+  options?: string[];
+}
+
+export interface CellStyle {
+  bold?: boolean;
+  italic?: boolean;
+  color?: string;
+  bgColor?: string;
+  align?: "left" | "center" | "right";
+}
+
+export interface RowData {
+  id: string;
+  sheetId: string;
+  order: number;
+  data: Record<string, any>;
+  styles?: Record<string, CellStyle>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface SheetMeta {
+  id: string;
+  name: string;
+  userId: string | null;
+  order: number;
+  columns: ColumnDef[];
+  rowCount?: number;
+  user?: {
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+  } | null;
+}
+
+export interface SheetDetail extends SheetMeta {
+  rows: RowData[];
+}

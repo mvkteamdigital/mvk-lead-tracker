@@ -1,0 +1,483 @@
+"use client";
+
+import React, { useState, useEffect } from "react";
+import { RowData, ColumnDef } from "@/lib/types";
+import { DEFAULT_FOLLOWUP_OPTIONS } from "@/lib/defaults";
+import {
+  X,
+  Check,
+  Trash2,
+  Phone,
+  User,
+  Building,
+  Maximize2,
+  DollarSign,
+  MapPin,
+  Calendar,
+  MessageSquare,
+  Sparkles,
+} from "lucide-react";
+
+interface LeadFormModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  lead: RowData | null;
+  columns: ColumnDef[];
+  sheetName: string;
+  onSave: (data: Record<string, string>, rowId?: string) => Promise<void>;
+  onDelete?: (rowId: string) => Promise<void>;
+}
+
+export function LeadFormModal({
+  isOpen,
+  onClose,
+  lead,
+  columns,
+  sheetName,
+  onSave,
+  onDelete,
+}: LeadFormModalProps) {
+  const [formData, setFormData] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Dynamic column lookup: by id first, then fallback to column position index
+  const getCol = (colId: string, indexFallback?: number): ColumnDef | undefined => {
+    const byId = columns.find((c) => c.id === colId);
+    if (byId) return byId;
+    if (indexFallback !== undefined && columns[indexFallback]) {
+      return columns[indexFallback];
+    }
+    return undefined;
+  };
+
+  // Dynamic header label lookup bound directly to the desktop grid's column header state
+  const getColName = (colId: string, indexFallback: number, fallback: string): string => {
+    const col = getCol(colId, indexFallback);
+    return col?.name?.trim() ? col.name : fallback;
+  };
+
+  // Dynamic dropdown options lookup bound to the column state
+  const getColOptions = (colId: string, indexFallback: number): string[] => {
+    const col = getCol(colId, indexFallback);
+    return col?.options && col.options.length > 0 ? col.options : DEFAULT_FOLLOWUP_OPTIONS;
+  };
+
+  // Detect any additional custom columns added beyond the standard 11
+  const standardIds = new Set([
+    "col_name",
+    "col_number",
+    "col_project_name",
+    "col_plot_size",
+    "col_budget",
+    "col_location",
+    "col_followup_1",
+    "col_followup_2",
+    "col_followup_3",
+    "col_followup_4",
+    "col_remarks",
+  ]);
+
+  const customColumns = columns.filter(
+    (col, idx) => !standardIds.has(col.id) && idx >= 11
+  );
+
+  useEffect(() => {
+    if (lead) {
+      setFormData({ ...lead.data });
+    } else {
+      setFormData({});
+    }
+    setError(null);
+  }, [lead, isOpen]);
+
+  if (!isOpen) return null;
+
+  const handleChange = (columnId: string, value: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      [columnId]: value,
+    }));
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const nameLabel = getColName("col_name", 4, "Name");
+    const numberLabel = getColName("col_number", 5, "Number");
+
+    if (!formData["col_name"]?.trim() && !formData["col_number"]?.trim()) {
+      setError(`Please provide at least a ${nameLabel} or ${numberLabel} for the lead.`);
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
+
+    try {
+      await onSave(formData, lead ? lead.id : undefined);
+      onClose();
+    } catch (err: any) {
+      setError(err.message || "Failed to save lead");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!lead || !onDelete) return;
+    if (confirm("Are you sure you want to delete this lead?")) {
+      setDeleting(true);
+      try {
+        await onDelete(lead.id);
+        onClose();
+      } catch (err: any) {
+        setError(err.message || "Failed to delete lead");
+      } finally {
+        setDeleting(false);
+      }
+    }
+  };
+
+  const isEditing = !!lead;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-xs p-0 sm:p-4 animate-in fade-in duration-150">
+      <div className="bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg max-h-[92vh] sm:max-h-[88vh] flex flex-col overflow-hidden animate-in slide-in-from-bottom-8 sm:zoom-in-95 duration-150">
+        
+        {/* Header */}
+        <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-2.5">
+            <div className="h-9 w-9 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 border border-amber-400/30">
+              <User className="h-5 w-5" />
+            </div>
+            <div>
+              <h3 className="font-bold text-base leading-tight">
+                {isEditing ? "Edit Lead Details" : "Add New Lead"}
+              </h3>
+              <p className="text-xs text-slate-300">
+                Sheet: <span className="text-amber-400 font-semibold">{sheetName}</span>
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Scrollable Form Body (All Fields Dynamically Bound to Grid Headers) */}
+        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
+          {error && (
+            <div className="p-3 text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-xl">
+              {error}
+            </div>
+          )}
+
+          {/* Quick Call Action if editing and number exists */}
+          {isEditing && formData["col_number"] && (
+            <div className="flex items-center justify-between p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-900">
+              <div className="flex items-center gap-2">
+                <Phone className="h-4 w-4 text-emerald-600" />
+                <span className="font-semibold text-xs">{formData["col_number"]}</span>
+              </div>
+              <a
+                href={`tel:${formData["col_number"]}`}
+                className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs flex items-center gap-1 shadow-xs"
+              >
+                Call Now
+              </a>
+            </div>
+          )}
+
+          {/* SECTION 1: Lead Contact Information */}
+          <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-3">
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+              <User className="h-3.5 w-3.5 text-amber-600" />
+              <span>Contact Details</span>
+            </div>
+
+            {/* Name Column - Dynamically bound to grid header */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {getColName("col_name", 4, "Name")} <span className="text-rose-500">*</span>
+              </label>
+              <input
+                type="text"
+                required
+                placeholder={`Enter ${getColName("col_name", 4, "Name").toLowerCase()}...`}
+                value={formData["col_name"] || ""}
+                onChange={(e) => handleChange("col_name", e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+              />
+            </div>
+
+            {/* Number Column - Dynamically bound to grid header */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {getColName("col_number", 5, "Number")} <span className="text-rose-500">*</span>
+              </label>
+              <div className="relative">
+                <Phone className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <input
+                  type="tel"
+                  placeholder="+91 98450 12345"
+                  value={formData["col_number"] || ""}
+                  onChange={(e) => handleChange("col_number", e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* SECTION 2: Project & Requirement Information */}
+          <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-3">
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+              <Building className="h-3.5 w-3.5 text-blue-600" />
+              <span>Project & Requirement</span>
+            </div>
+
+            {/* Project Name Column - Dynamically bound to grid header */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {getColName("col_project_name", 0, "Project Name")}
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. Green Valley Phase 2, Urban Palms"
+                value={formData["col_project_name"] || ""}
+                onChange={(e) => handleChange("col_project_name", e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+              />
+            </div>
+
+            {/* Enquired Plot Size Column - Dynamically bound to grid header */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {getColName("col_plot_size", 1, "Enquired Plot Size")}
+              </label>
+              <input
+                type="text"
+                placeholder="e.g. 1200 sqft (30x40), 1500 sqft"
+                value={formData["col_plot_size"] || ""}
+                onChange={(e) => handleChange("col_plot_size", e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Client Budget Column - Dynamically bound to grid header */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {getColName("col_budget", 2, "Client Budget")}
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. ₹30-40 lakhs, ₹50-75L"
+                  value={formData["col_budget"] || ""}
+                  onChange={(e) => handleChange("col_budget", e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+                />
+              </div>
+
+              {/* Client Location Column - Dynamically bound to grid header */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {getColName("col_location", 3, "Client Location")}
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. Whitefield, Sarjapur, HSR"
+                  value={formData["col_location"] || ""}
+                  onChange={(e) => handleChange("col_location", e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* SECTION 3: The 4 Follow-Up Dropdowns - Dynamically bound to grid headers & options */}
+          <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-3">
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+              <Calendar className="h-3.5 w-3.5 text-purple-600" />
+              <span>Follow-Up Progression</span>
+            </div>
+
+            {/* 1st Follow Up */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {getColName("col_followup_1", 6, "1st Follow Up")}
+              </label>
+              <select
+                value={formData["col_followup_1"] || ""}
+                onChange={(e) => handleChange("col_followup_1", e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+              >
+                <option value="">-- Select Status --</option>
+                {getColOptions("col_followup_1", 6).map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* 2nd Follow Up */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {getColName("col_followup_2", 7, "2nd Follow Up")}
+              </label>
+              <select
+                value={formData["col_followup_2"] || ""}
+                onChange={(e) => handleChange("col_followup_2", e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+              >
+                <option value="">-- Select Status --</option>
+                {getColOptions("col_followup_2", 7).map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* 3rd Follow Up */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {getColName("col_followup_3", 8, "3rd Follow Up")}
+              </label>
+              <select
+                value={formData["col_followup_3"] || ""}
+                onChange={(e) => handleChange("col_followup_3", e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+              >
+                <option value="">-- Select Status --</option>
+                {getColOptions("col_followup_3", 8).map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* 4th Follow Up */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {getColName("col_followup_4", 9, "4th Follow Up")}
+              </label>
+              <select
+                value={formData["col_followup_4"] || ""}
+                onChange={(e) => handleChange("col_followup_4", e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+              >
+                <option value="">-- Select Status --</option>
+                {getColOptions("col_followup_4", 9).map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* SECTION 4: Remarks - Dynamically bound to grid header */}
+          <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2">
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+              <MessageSquare className="h-3.5 w-3.5 text-emerald-600" />
+              <span>{getColName("col_remarks", 10, "Remarks")}</span>
+            </div>
+            <textarea
+              rows={3}
+              placeholder={`Enter ${getColName("col_remarks", 10, "Remarks").toLowerCase()}...`}
+              value={formData["col_remarks"] || ""}
+              onChange={(e) => handleChange("col_remarks", e.target.value)}
+              className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+            />
+          </div>
+
+          {/* SECTION 5: Additional Custom Columns (if created by Admin) */}
+          {customColumns.length > 0 && (
+            <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-3">
+              <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                <Sparkles className="h-3.5 w-3.5 text-amber-600" />
+                <span>Additional Fields</span>
+              </div>
+              {customColumns.map((col) => (
+                <div key={col.id}>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {col.name}
+                  </label>
+                  {col.type === "dropdown" ? (
+                    <select
+                      value={formData[col.id] || ""}
+                      onChange={(e) => handleChange(col.id, e.target.value)}
+                      className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+                    >
+                      <option value="">-- Select Option --</option>
+                      {(col.options || []).map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      type={col.type === "number" ? "number" : "text"}
+                      placeholder={`Enter ${col.name.toLowerCase()}...`}
+                      value={formData[col.id] || ""}
+                      onChange={(e) => handleChange(col.id, e.target.value)}
+                      className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </form>
+
+        {/* Sticky Action Footer */}
+        <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
+          {isEditing && onDelete ? (
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={deleting || saving}
+              className="px-3.5 py-2.5 text-rose-600 hover:bg-rose-50 rounded-xl font-semibold text-xs flex items-center gap-1.5 transition-colors border border-rose-200"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span>Delete</span>
+            </button>
+          ) : (
+            <div />
+          )}
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="px-4 py-2.5 text-slate-600 hover:text-slate-900 rounded-xl font-semibold text-xs transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={saving}
+              className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold text-xs rounded-xl shadow-md hover:shadow-lg transition-all flex items-center gap-1.5 disabled:opacity-50"
+            >
+              {saving ? (
+                <span className="inline-block h-3.5 w-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Check className="h-4 w-4 text-emerald-400" />
+              )}
+              <span>{isEditing ? "Save / Update Lead" : "Create Lead"}</span>
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  );
+}

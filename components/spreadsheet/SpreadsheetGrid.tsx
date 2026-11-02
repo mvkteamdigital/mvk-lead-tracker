@@ -1,0 +1,1447 @@
+"use client";
+
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
+import { STATUS_COLORS } from "@/lib/defaults";
+import {
+  ChevronDown,
+  Trash2,
+  Plus,
+  Copy,
+  Scissors,
+  Edit2,
+  Check,
+  Settings2,
+  MoreHorizontal,
+  ArrowUp,
+  ArrowDown,
+  Layers,
+} from "lucide-react";
+
+interface SpreadsheetGridProps {
+  sheet: SheetDetail;
+  onUpdateCell: (rowId: string, columnId: string, value: string, order?: number) => Promise<void>;
+  onBatchUpdateRows: (rows: Partial<RowData>[]) => Promise<void>;
+  onAddRowAt: (index?: number) => Promise<void>;
+  onDeleteRows: (rowIds: string[]) => Promise<void>;
+  onUpdateColumns: (columns: ColumnDef[]) => Promise<void>;
+  onOpenDropdownModal: (col: ColumnDef) => void;
+  activeCell: { rowIdx: number; colId: string; colName: string } | null;
+  setActiveCell: (cell: { rowIdx: number; colId: string; colName: string } | null) => void;
+  searchQuery: string;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+}
+
+const ROW_HEIGHT = 36;
+const BUFFER = 25;
+
+export function SpreadsheetGrid({
+  sheet,
+  onUpdateCell,
+  onBatchUpdateRows,
+  onAddRowAt,
+  onDeleteRows,
+  onUpdateColumns,
+  onOpenDropdownModal,
+  activeCell,
+  setActiveCell,
+  searchQuery,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
+}: SpreadsheetGridProps) {
+  // 1,000 default rows support with dynamic expansion
+  const [expandedRowCount, setExpandedRowCount] = useState(1000);
+  const [addMoreAmount, setAddMoreAmount] = useState(100);
+
+  // Virtual windowing scroll tracking
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(800);
+  const gridContainerRef = useRef<HTMLDivElement>(null);
+
+  // Editing state
+  const [editingCell, setEditingCell] = useState<{ rowId: string; colId: string; rowIdx: number } | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const editInputRef = useRef<HTMLInputElement>(null);
+
+  // Google Sheets Selection state manager
+  const [selectionAnchor, setSelectionAnchor] = useState<{ rowIdx: number; colIdx: number } | null>(null);
+  const [selectionFocus, setSelectionFocus] = useState<{ rowIdx: number; colIdx: number } | null>(null);
+  const [isMouseDown, setIsMouseDown] = useState(false);
+
+  // Dropdown popover state
+  const [openDropdown, setOpenDropdown] = useState<{
+    rowId: string;
+    colId: string;
+    rowIdx: number;
+    top: number;
+    left: number;
+    options: string[];
+  } | null>(null);
+
+  // Column renaming / context menu
+  const [columnMenu, setColumnMenu] = useState<{ colId: string; top: number; left: number } | null>(null);
+  const [renamingColId, setRenamingColId] = useState<string | null>(null);
+  const [colRenameValue, setColRenameValue] = useState("");
+
+  // Context menu on cells / rows
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    rowId: string;
+    colId: string;
+    rowIdx: number;
+  } | null>(null);
+
+  // Column resizing state
+  const [resizingCol, setResizingCol] = useState<{ id: string; startX: number; startWidth: number } | null>(null);
+
+  // Track max order of existing rows
+  const maxExistingOrder = useMemo(() => {
+    let max = -1;
+    sheet.rows.forEach((r, idx) => {
+      const order = r.order !== undefined ? r.order : idx;
+      if (order > max) max = order;
+    });
+    return max;
+  }, [sheet.rows]);
+
+  const totalRowCount = useMemo(() => {
+    return Math.max(1000, maxExistingOrder + 1, expandedRowCount);
+  }, [maxExistingOrder, expandedRowCount]);
+
+  // Fast map from row index to database RowData
+  const rowsByOrder = useMemo(() => {
+    const map = new Map<number, RowData>();
+    sheet.rows.forEach((r, idx) => {
+      const order = r.order !== undefined ? r.order : idx;
+      map.set(order, r);
+    });
+    return map;
+  }, [sheet.rows]);
+
+  // Helper to get row data at index
+  const getRowAtIndex = useCallback(
+    (index: number): RowData => {
+      const existing = rowsByOrder.get(index);
+      if (existing) return existing;
+      return {
+        id: `temp_${index}`,
+        sheetId: sheet.id,
+        order: index,
+        data: {},
+        styles: {},
+      };
+    },
+    [rowsByOrder, sheet.id]
+  );
+
+  // Windowing calculations
+  useEffect(() => {
+    if (gridContainerRef.current) {
+      setViewportHeight(gridContainerRef.current.clientHeight || 800);
+    }
+  }, []);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    setScrollTop(e.currentTarget.scrollTop);
+  };
+
+  const startIndex = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - BUFFER);
+  const endIndex = Math.min(totalRowCount, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + BUFFER);
+  const topSpacerHeight = startIndex * ROW_HEIGHT;
+  const bottomSpacerHeight = Math.max(0, (totalRowCount - endIndex) * ROW_HEIGHT);
+
+  const visibleRowIndices = useMemo(() => {
+    const indices: number[] = [];
+    for (let i = startIndex; i < endIndex; i++) {
+      indices.push(i);
+    }
+    return indices;
+  }, [startIndex, endIndex]);
+
+  // Focus editing input on entering edit mode
+  useEffect(() => {
+    if (editingCell && editInputRef.current) {
+      editInputRef.current.focus();
+      editInputRef.current.select();
+    }
+  }, [editingCell]);
+
+  // Synchronize selection anchor and focus when sheet changes or initial activeCell is set
+  useEffect(() => {
+    if (activeCell) {
+      const colIdx = sheet.columns.findIndex((c) => c.id === activeCell.colId);
+      if (colIdx !== -1) {
+        setSelectionAnchor({ rowIdx: activeCell.rowIdx, colIdx });
+        setSelectionFocus({ rowIdx: activeCell.rowIdx, colIdx });
+      }
+    }
+  }, [sheet.id]);
+
+  // Global mouseup to release drag selection even outside the table
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      setIsMouseDown(false);
+    };
+    window.addEventListener("mouseup", handleGlobalMouseUp);
+    return () => {
+      window.removeEventListener("mouseup", handleGlobalMouseUp);
+    };
+  }, []);
+
+  // Global keydown for Undo / Redo (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Don't intercept if an input or textarea outside grid editing is active
+      const target = e.target as HTMLElement;
+      if (
+        target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) &&
+        target !== editInputRef.current
+      ) {
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
+        if (!editingCell) {
+          e.preventDefault();
+          if (e.shiftKey) {
+            if (onRedo) onRedo();
+          } else {
+            if (onUndo) onUndo();
+          }
+        }
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Y")) {
+        if (!editingCell) {
+          e.preventDefault();
+          if (onRedo) onRedo();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, [onUndo, onRedo, editingCell]);
+
+  // Compute selection range rectangle (min/max row and column)
+  const selectionRange = useMemo(() => {
+    if (!selectionAnchor || !selectionFocus) {
+      if (activeCell) {
+        const colIdx = sheet.columns.findIndex((c) => c.id === activeCell.colId);
+        if (colIdx !== -1) {
+          return {
+            startRow: activeCell.rowIdx,
+            endRow: activeCell.rowIdx,
+            startCol: colIdx,
+            endCol: colIdx,
+          };
+        }
+      }
+      return null;
+    }
+
+    return {
+      startRow: Math.min(selectionAnchor.rowIdx, selectionFocus.rowIdx),
+      endRow: Math.max(selectionAnchor.rowIdx, selectionFocus.rowIdx),
+      startCol: Math.min(selectionAnchor.colIdx, selectionFocus.colIdx),
+      endCol: Math.max(selectionAnchor.colIdx, selectionFocus.colIdx),
+    };
+  }, [selectionAnchor, selectionFocus, activeCell, sheet.columns]);
+
+  const isMultiCell = useMemo(() => {
+    if (!selectionRange) return false;
+    return (
+      selectionRange.startRow !== selectionRange.endRow ||
+      selectionRange.startCol !== selectionRange.endCol
+    );
+  }, [selectionRange]);
+
+  // Handle cell mouse down (click, Shift-click, or start of click-and-drag)
+  const handleCellMouseDown = (
+    e: React.MouseEvent,
+    rowIdx: number,
+    colIdx: number,
+    col: ColumnDef
+  ) => {
+    if (e.button !== 0) return; // Only primary left-click
+
+    // If another cell was being edited, commit it
+    if (editingCell && (editingCell.rowIdx !== rowIdx || editingCell.colId !== col.id)) {
+      commitEdit();
+    }
+
+    // Prevent native browser text selection bleed while allowing focus
+    if (!editingCell || editingCell.rowIdx !== rowIdx || editingCell.colId !== col.id) {
+      e.preventDefault();
+    }
+
+    if (gridContainerRef.current) {
+      gridContainerRef.current.focus();
+    }
+
+    if (e.shiftKey && selectionAnchor) {
+      setSelectionFocus({ rowIdx, colIdx });
+    } else {
+      setActiveCell({ rowIdx, colId: col.id, colName: col.name });
+      setSelectionAnchor({ rowIdx, colIdx });
+      setSelectionFocus({ rowIdx, colIdx });
+      setIsMouseDown(true);
+    }
+    setOpenDropdown(null);
+  };
+
+  // Handle cell mouse enter during drag
+  const handleCellMouseEnter = (rowIdx: number, colIdx: number) => {
+    if (isMouseDown && selectionAnchor) {
+      setSelectionFocus({ rowIdx, colIdx });
+    }
+  };
+
+  // Row header click (selects the entire row across all columns, like Google Sheets)
+  const handleRowHeaderClick = (e: React.MouseEvent, rowIdx: number) => {
+    e.preventDefault();
+    if (editingCell) {
+      commitEdit();
+    }
+    if (gridContainerRef.current) {
+      gridContainerRef.current.focus();
+    }
+
+    const firstCol = sheet.columns[0];
+    if (!firstCol) return;
+    setActiveCell({
+      rowIdx,
+      colId: firstCol.id,
+      colName: firstCol.name,
+    });
+    if (e.shiftKey && selectionAnchor) {
+      setSelectionFocus({ rowIdx, colIdx: sheet.columns.length - 1 });
+    } else {
+      setSelectionAnchor({ rowIdx, colIdx: 0 });
+      setSelectionFocus({ rowIdx, colIdx: sheet.columns.length - 1 });
+    }
+  };
+
+  // Start in-cell edit
+  const startEditing = (rowIdx: number, col: ColumnDef) => {
+    if (col.type === "dropdown") return;
+    const row = getRowAtIndex(rowIdx);
+    setEditingCell({ rowId: row.id, colId: col.id, rowIdx });
+    setEditValue(row.data[col.id] || "");
+  };
+
+  // Commit in-cell edit with optional directional movement
+  const commitEdit = async (moveDirection?: "down" | "up" | "right" | "left") => {
+    if (!editingCell) return;
+    const { rowId, colId, rowIdx } = editingCell;
+    const valueToSave = editValue;
+    setEditingCell(null);
+    await onUpdateCell(rowId, colId, valueToSave, rowIdx);
+
+    if (moveDirection && activeCell) {
+      const currentColIdx = sheet.columns.findIndex((c) => c.id === activeCell.colId);
+      const maxRowIdx = totalRowCount - 1;
+      const maxColIdx = sheet.columns.length - 1;
+
+      if (moveDirection === "down" && activeCell.rowIdx < maxRowIdx) {
+        const nextRow = activeCell.rowIdx + 1;
+        setActiveCell({ rowIdx: nextRow, colId: activeCell.colId, colName: activeCell.colName });
+        setSelectionAnchor({ rowIdx: nextRow, colIdx: currentColIdx });
+        setSelectionFocus({ rowIdx: nextRow, colIdx: currentColIdx });
+      } else if (moveDirection === "up" && activeCell.rowIdx > 0) {
+        const nextRow = activeCell.rowIdx - 1;
+        setActiveCell({ rowIdx: nextRow, colId: activeCell.colId, colName: activeCell.colName });
+        setSelectionAnchor({ rowIdx: nextRow, colIdx: currentColIdx });
+        setSelectionFocus({ rowIdx: nextRow, colIdx: currentColIdx });
+      } else if (moveDirection === "right" && currentColIdx < maxColIdx) {
+        const nextCol = sheet.columns[currentColIdx + 1];
+        setActiveCell({ rowIdx: activeCell.rowIdx, colId: nextCol.id, colName: nextCol.name });
+        setSelectionAnchor({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx + 1 });
+        setSelectionFocus({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx + 1 });
+      } else if (moveDirection === "left" && currentColIdx > 0) {
+        const prevCol = sheet.columns[currentColIdx - 1];
+        setActiveCell({ rowIdx: activeCell.rowIdx, colId: prevCol.id, colName: prevCol.name });
+        setSelectionAnchor({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx - 1 });
+        setSelectionFocus({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx - 1 });
+      }
+    }
+  };
+
+  // Open dropdown popover
+  const handleDropdownClick = (
+    e: React.MouseEvent,
+    rowIdx: number,
+    colIdx: number,
+    col: ColumnDef
+  ) => {
+    e.stopPropagation();
+    setActiveCell({ rowIdx, colId: col.id, colName: col.name });
+    setSelectionAnchor({ rowIdx, colIdx });
+    setSelectionFocus({ rowIdx, colIdx });
+    const row = getRowAtIndex(rowIdx);
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    setOpenDropdown({
+      rowId: row.id,
+      colId: col.id,
+      rowIdx,
+      top: rect.bottom + 2,
+      left: rect.left,
+      options: col.options || [],
+    });
+  };
+
+  // Select dropdown option
+  const handleSelectDropdownOption = async (option: string) => {
+    if (!openDropdown) return;
+    const { rowId, colId, rowIdx } = openDropdown;
+    setOpenDropdown(null);
+    await onUpdateCell(rowId, colId, option, rowIdx);
+  };
+
+  // Column resize logic
+  const startColumnResize = (e: React.MouseEvent, col: ColumnDef) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setResizingCol({
+      id: col.id,
+      startX: e.clientX,
+      startWidth: col.width || 180,
+    });
+  };
+
+  useEffect(() => {
+    if (!resizingCol) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const delta = e.clientX - resizingCol.startX;
+      const newWidth = Math.max(100, resizingCol.startWidth + delta);
+      const updatedCols = sheet.columns.map((c) =>
+        c.id === resizingCol.id ? { ...c, width: newWidth } : c
+      );
+      onUpdateColumns(updatedCols);
+    };
+
+    const handleMouseUp = () => {
+      setResizingCol(null);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [resizingCol, sheet.columns, onUpdateColumns]);
+
+  // Keyboard Navigation with Google Sheets Range Selection & Standard Spreadsheet Controls
+  const handleKeyDown = useCallback(
+    async (e: React.KeyboardEvent) => {
+      // 1. In Edit Mode
+      if (editingCell) {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          commitEdit(e.shiftKey ? "up" : "down");
+        } else if (e.key === "Tab") {
+          e.preventDefault();
+          commitEdit(e.shiftKey ? "left" : "right");
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          setEditingCell(null);
+        }
+        return;
+      }
+
+      // 2. Global Undo / Redo Shortcuts (Ctrl+Z, Ctrl+Y, Ctrl+Shift+Z)
+      if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        if (e.shiftKey) {
+          if (onRedo) onRedo();
+        } else {
+          if (onUndo) onUndo();
+        }
+        return;
+      }
+
+      if ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Y")) {
+        e.preventDefault();
+        if (onRedo) onRedo();
+        return;
+      }
+
+      if (!activeCell) return;
+
+      const currentColIdx = sheet.columns.findIndex((c) => c.id === activeCell.colId);
+      const maxRowIdx = totalRowCount - 1;
+      const maxColIdx = sheet.columns.length - 1;
+
+      // 3. Escape: Collapse multi-cell selection to active cell
+      if (e.key === "Escape") {
+        e.preventDefault();
+        if (currentColIdx !== -1) {
+          setSelectionAnchor({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx });
+          setSelectionFocus({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx });
+        }
+        return;
+      }
+
+      // 4. Enter / Shift+Enter Navigation:
+      // Pressing Enter moves active cell focus down one row. Shift+Enter moves it up one row.
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          if (activeCell.rowIdx > 0) {
+            const newRow = activeCell.rowIdx - 1;
+            setActiveCell({
+              rowIdx: newRow,
+              colId: activeCell.colId,
+              colName: activeCell.colName,
+            });
+            setSelectionAnchor({ rowIdx: newRow, colIdx: currentColIdx });
+            setSelectionFocus({ rowIdx: newRow, colIdx: currentColIdx });
+          }
+        } else {
+          if (activeCell.rowIdx < maxRowIdx) {
+            const newRow = activeCell.rowIdx + 1;
+            setActiveCell({
+              rowIdx: newRow,
+              colId: activeCell.colId,
+              colName: activeCell.colName,
+            });
+            setSelectionAnchor({ rowIdx: newRow, colIdx: currentColIdx });
+            setSelectionFocus({ rowIdx: newRow, colIdx: currentColIdx });
+          }
+        }
+        return;
+      }
+
+      // 5. Tab / Shift+Tab Navigation:
+      // Pressing Tab moves active cell focus right one column. Shift+Tab moves it left one column.
+      if (e.key === "Tab") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          if (currentColIdx > 0) {
+            const prevCol = sheet.columns[currentColIdx - 1];
+            setActiveCell({
+              rowIdx: activeCell.rowIdx,
+              colId: prevCol.id,
+              colName: prevCol.name,
+            });
+            setSelectionAnchor({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx - 1 });
+            setSelectionFocus({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx - 1 });
+          }
+        } else {
+          if (currentColIdx < maxColIdx) {
+            const nextCol = sheet.columns[currentColIdx + 1];
+            setActiveCell({
+              rowIdx: activeCell.rowIdx,
+              colId: nextCol.id,
+              colName: nextCol.name,
+            });
+            setSelectionAnchor({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx + 1 });
+            setSelectionFocus({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx + 1 });
+          }
+        }
+        return;
+      }
+
+      // 6. Arrow Keys (Up, Down, Left, Right)
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          const currentFocusRow = selectionFocus?.rowIdx ?? activeCell.rowIdx;
+          const currentFocusCol = selectionFocus?.colIdx ?? currentColIdx;
+          const newFocusRow = Math.max(0, currentFocusRow - 1);
+          setSelectionFocus({ rowIdx: newFocusRow, colIdx: currentFocusCol });
+        } else {
+          if (activeCell.rowIdx > 0) {
+            const newRow = activeCell.rowIdx - 1;
+            setActiveCell({
+              rowIdx: newRow,
+              colId: activeCell.colId,
+              colName: activeCell.colName,
+            });
+            setSelectionAnchor({ rowIdx: newRow, colIdx: currentColIdx });
+            setSelectionFocus({ rowIdx: newRow, colIdx: currentColIdx });
+          }
+        }
+        return;
+      }
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          const currentFocusRow = selectionFocus?.rowIdx ?? activeCell.rowIdx;
+          const currentFocusCol = selectionFocus?.colIdx ?? currentColIdx;
+          const newFocusRow = Math.min(maxRowIdx, currentFocusRow + 1);
+          setSelectionFocus({ rowIdx: newFocusRow, colIdx: currentFocusCol });
+        } else {
+          if (activeCell.rowIdx < maxRowIdx) {
+            const newRow = activeCell.rowIdx + 1;
+            setActiveCell({
+              rowIdx: newRow,
+              colId: activeCell.colId,
+              colName: activeCell.colName,
+            });
+            setSelectionAnchor({ rowIdx: newRow, colIdx: currentColIdx });
+            setSelectionFocus({ rowIdx: newRow, colIdx: currentColIdx });
+          }
+        }
+        return;
+      }
+
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          const currentFocusRow = selectionFocus?.rowIdx ?? activeCell.rowIdx;
+          const currentFocusCol = selectionFocus?.colIdx ?? currentColIdx;
+          const newFocusCol = Math.max(0, currentFocusCol - 1);
+          setSelectionFocus({ rowIdx: currentFocusRow, colIdx: newFocusCol });
+        } else {
+          if (currentColIdx > 0) {
+            const prevCol = sheet.columns[currentColIdx - 1];
+            setActiveCell({
+              rowIdx: activeCell.rowIdx,
+              colId: prevCol.id,
+              colName: prevCol.name,
+            });
+            setSelectionAnchor({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx - 1 });
+            setSelectionFocus({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx - 1 });
+          }
+        }
+        return;
+      }
+
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          const currentFocusRow = selectionFocus?.rowIdx ?? activeCell.rowIdx;
+          const currentFocusCol = selectionFocus?.colIdx ?? currentColIdx;
+          const newFocusCol = Math.min(maxColIdx, currentFocusCol + 1);
+          setSelectionFocus({ rowIdx: currentFocusRow, colIdx: newFocusCol });
+        } else {
+          if (currentColIdx < maxColIdx) {
+            const nextCol = sheet.columns[currentColIdx + 1];
+            setActiveCell({
+              rowIdx: activeCell.rowIdx,
+              colId: nextCol.id,
+              colName: nextCol.name,
+            });
+            setSelectionAnchor({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx + 1 });
+            setSelectionFocus({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx + 1 });
+          }
+        }
+        return;
+      }
+
+      // 7. F2 to start editing active cell
+      if (e.key === "F2") {
+        e.preventDefault();
+        const activeColDef = sheet.columns[currentColIdx];
+        if (activeColDef && activeColDef.type !== "dropdown") {
+          startEditing(activeCell.rowIdx, activeColDef);
+        }
+        return;
+      }
+
+      // 8. Delete / Backspace: Clear selected cell(s) and update database
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        if (isMultiCell && selectionRange) {
+          const rowsToUpsert: Partial<RowData>[] = [];
+          for (let r = selectionRange.startRow; r <= selectionRange.endRow; r++) {
+            const existingRow = getRowAtIndex(r);
+            const rowData = { ...existingRow.data };
+            let changed = false;
+            for (let c = selectionRange.startCol; c <= selectionRange.endCol; c++) {
+              const col = sheet.columns[c];
+              if (col && rowData[col.id]) {
+                rowData[col.id] = "";
+                changed = true;
+              }
+            }
+            if (changed) {
+              rowsToUpsert.push({
+                id: existingRow.id,
+                sheetId: sheet.id,
+                order: r,
+                data: rowData,
+              });
+            }
+          }
+          if (rowsToUpsert.length > 0) {
+            await onBatchUpdateRows(rowsToUpsert);
+          }
+        } else {
+          const activeRow = getRowAtIndex(activeCell.rowIdx);
+          if (activeRow.data[activeCell.colId]) {
+            await onUpdateCell(activeRow.id, activeCell.colId, "", activeCell.rowIdx);
+          }
+        }
+        return;
+      }
+
+      // 9. Quick edit on typing alphanumeric or printable characters directly
+      if (
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey &&
+        e.key.length === 1 &&
+        currentColIdx !== -1
+      ) {
+        const activeColDef = sheet.columns[currentColIdx];
+        if (activeColDef && activeColDef.type !== "dropdown") {
+          e.preventDefault();
+          const row = getRowAtIndex(activeCell.rowIdx);
+          setEditingCell({ rowId: row.id, colId: activeColDef.id, rowIdx: activeCell.rowIdx });
+          setEditValue(e.key);
+          return;
+        }
+      }
+    },
+    [
+      editingCell,
+      activeCell,
+      selectionFocus,
+      isMultiCell,
+      selectionRange,
+      sheet.columns,
+      sheet.id,
+      totalRowCount,
+      commitEdit,
+      getRowAtIndex,
+      onBatchUpdateRows,
+      onUpdateCell,
+      onUndo,
+      onRedo,
+    ]
+  );
+
+  // Multi-cell Copy & Paste (Ctrl+C / Ctrl+V) - Excel & Google Sheets compatible
+  const handlePaste = useCallback(
+    async (e: React.ClipboardEvent) => {
+      if (editingCell) return;
+      if (!activeCell) return;
+
+      e.preventDefault();
+      const clipboardText = e.clipboardData.getData("text/plain");
+      if (!clipboardText) return;
+
+      // Parse TSV lines from Excel / Google Sheets
+      const rawLines = clipboardText.split(/\r\n|\n/);
+      // Remove trailing empty newline if present
+      if (rawLines.length > 1 && rawLines[rawLines.length - 1] === "") {
+        rawLines.pop();
+      }
+      if (rawLines.length === 0) return;
+
+      const parsedGrid = rawLines.map((line) => {
+        return line.split("\t").map((cell) => {
+          let val = cell.trim();
+          if (val.startsWith('"') && val.endsWith('"') && val.length >= 2) {
+            val = val.substring(1, val.length - 1).replace(/""/g, '"');
+          }
+          return val;
+        });
+      });
+
+      const isSingleValue = parsedGrid.length === 1 && parsedGrid[0].length === 1;
+
+      // 1. SINGLE VALUE PASTE TO MULTI-CELL RANGE:
+      // If a single value is copied and multiple cells are highlighted, fill the entire range
+      if (isSingleValue && isMultiCell && selectionRange) {
+        const singleVal = parsedGrid[0][0];
+
+        // Expand rows dynamically if selection extends beyond totalRowCount
+        if (selectionRange.endRow >= totalRowCount) {
+          setExpandedRowCount(selectionRange.endRow + 50);
+        }
+
+        const rowsToUpsert: Partial<RowData>[] = [];
+
+        for (let r = selectionRange.startRow; r <= selectionRange.endRow; r++) {
+          const existingRow = rowsByOrder.get(r);
+          const rowData = existingRow ? { ...existingRow.data } : {};
+
+          for (let c = selectionRange.startCol; c <= selectionRange.endCol; c++) {
+            const col = sheet.columns[c];
+            if (col) {
+              rowData[col.id] = singleVal;
+            }
+          }
+
+          rowsToUpsert.push({
+            id: existingRow ? existingRow.id : `temp_${r}`,
+            sheetId: sheet.id,
+            order: r,
+            data: rowData,
+          });
+        }
+
+        if (rowsToUpsert.length > 0) {
+          await onBatchUpdateRows(rowsToUpsert);
+        }
+        return;
+      }
+
+      // 2. MATRIX PASTE RETENTION (Excel / Google Sheets multi-cell grid paste):
+      // Paste matrix starting from the top-left active cell
+      const startRowIdx = activeCell.rowIdx;
+      const startColIdx = sheet.columns.findIndex((c) => c.id === activeCell.colId);
+      if (startColIdx === -1) return;
+
+      // Expand rows dynamically if paste exceeds current row count
+      const requiredRows = startRowIdx + parsedGrid.length;
+      if (requiredRows > totalRowCount) {
+        setExpandedRowCount(requiredRows + 50);
+      }
+
+      // Build batch updates
+      const rowsToUpsert: Partial<RowData>[] = [];
+
+      parsedGrid.forEach((rowVals, rOffset) => {
+        const targetRowIdx = startRowIdx + rOffset;
+        const existingRow = rowsByOrder.get(targetRowIdx);
+        const rowData = existingRow ? { ...existingRow.data } : {};
+
+        rowVals.forEach((val, cOffset) => {
+          const targetColIdx = startColIdx + cOffset;
+          if (targetColIdx < sheet.columns.length) {
+            const col = sheet.columns[targetColIdx];
+            rowData[col.id] = val;
+          }
+        });
+
+        rowsToUpsert.push({
+          id: existingRow ? existingRow.id : `temp_${targetRowIdx}`,
+          sheetId: sheet.id,
+          order: targetRowIdx,
+          data: rowData,
+        });
+      });
+
+      if (rowsToUpsert.length > 0) {
+        await onBatchUpdateRows(rowsToUpsert);
+      }
+    },
+    [
+      editingCell,
+      activeCell,
+      isMultiCell,
+      selectionRange,
+      sheet.columns,
+      sheet.id,
+      totalRowCount,
+      rowsByOrder,
+      onBatchUpdateRows,
+    ]
+  );
+
+  // Copy active cell value or multi-cell selection range (Ctrl+C) - Google Sheets format
+  const handleCopy = useCallback(
+    (e: React.ClipboardEvent) => {
+      if (editingCell) return;
+      if (!activeCell) return;
+
+      if (isMultiCell && selectionRange) {
+        const lines: string[] = [];
+        for (let r = selectionRange.startRow; r <= selectionRange.endRow; r++) {
+          const row = getRowAtIndex(r);
+          const rowVals: string[] = [];
+          for (let c = selectionRange.startCol; c <= selectionRange.endCol; c++) {
+            const col = sheet.columns[c];
+            rowVals.push(col ? (row.data[col.id] || "") : "");
+          }
+          lines.push(rowVals.join("\t"));
+        }
+        e.clipboardData.setData("text/plain", lines.join("\n"));
+        e.preventDefault();
+        return;
+      }
+
+      const activeRow = getRowAtIndex(activeCell.rowIdx);
+      const cellVal = activeRow.data[activeCell.colId] || "";
+      e.clipboardData.setData("text/plain", cellVal);
+      e.preventDefault();
+    },
+    [editingCell, activeCell, isMultiCell, selectionRange, getRowAtIndex, sheet.columns]
+  );
+
+  // Context Menu
+  const handleContextMenu = (
+    e: React.MouseEvent,
+    rowIdx: number,
+    colIdx: number,
+    col: ColumnDef
+  ) => {
+    e.preventDefault();
+    const inSel =
+      selectionRange !== null &&
+      rowIdx >= selectionRange.startRow &&
+      rowIdx <= selectionRange.endRow &&
+      colIdx >= selectionRange.startCol &&
+      colIdx <= selectionRange.endCol;
+
+    if (!inSel) {
+      setActiveCell({ rowIdx, colId: col.id, colName: col.name });
+      setSelectionAnchor({ rowIdx, colIdx });
+      setSelectionFocus({ rowIdx, colIdx });
+    }
+
+    const row = getRowAtIndex(rowIdx);
+    setContextMenu({
+      x: e.clientX,
+      y: e.clientY,
+      rowId: row.id,
+      colId: col.id,
+      rowIdx,
+    });
+  };
+
+  useEffect(() => {
+    const handleDocumentClick = () => {
+      setContextMenu(null);
+      setColumnMenu(null);
+      if (openDropdown) setOpenDropdown(null);
+    };
+    document.addEventListener("click", handleDocumentClick);
+    return () => document.removeEventListener("click", handleDocumentClick);
+  }, [openDropdown]);
+
+  // Column Actions
+  const handleStartRenameColumn = (col: ColumnDef) => {
+    setRenamingColId(col.id);
+    setColRenameValue(col.name);
+    setColumnMenu(null);
+  };
+
+  const handleSaveRenameColumn = async (colId: string) => {
+    const trimmed = colRenameValue.trim();
+    if (trimmed) {
+      const updated = sheet.columns.map((c) =>
+        c.id === colId ? { ...c, name: trimmed } : c
+      );
+      await onUpdateColumns(updated);
+      if (activeCell && activeCell.colId === colId) {
+        setActiveCell({ ...activeCell, colName: trimmed });
+      }
+    }
+    setRenamingColId(null);
+  };
+
+  const handleDeleteColumn = async (colId: string) => {
+    if (sheet.columns.length <= 1) {
+      alert("A sheet must have at least one column.");
+      return;
+    }
+    if (confirm("Are you sure you want to delete this column?")) {
+      const updated = sheet.columns.filter((c) => c.id !== colId);
+      await onUpdateColumns(updated);
+    }
+    setColumnMenu(null);
+  };
+
+  return (
+    <div
+      ref={gridContainerRef}
+      tabIndex={0}
+      onScroll={handleScroll}
+      onKeyDown={handleKeyDown}
+      onPaste={handlePaste}
+      onCopy={handleCopy}
+      className="flex-1 overflow-auto bg-slate-100 outline-none relative select-none"
+    >
+      <div className="min-w-max pb-24 select-none">
+        <table className="border-collapse table-fixed bg-white text-slate-800 text-xs shadow-xs select-none">
+          {/* Column definitions & widths */}
+          <colgroup>
+            <col style={{ width: "56px" }} />
+            {sheet.columns.map((col) => (
+              <col key={col.id} style={{ width: `${col.width || 180}px` }} />
+            ))}
+          </colgroup>
+
+          {/* Sticky Table Header */}
+          <thead className="sticky top-0 z-20 shadow-xs">
+            <tr className="h-10 select-none">
+              {/* Row number top-left corner */}
+              <th className="sticky left-0 z-30 bg-slate-200 border-b-2 border-r border-slate-300 text-slate-500 font-semibold text-center text-[11px] p-0 w-[56px]">
+                #
+              </th>
+
+              {/* 11 Columns */}
+              {sheet.columns.map((col, colIdx) => {
+                const isNavy = col.headerStyle === "navy" || col.name.includes("Follow Up");
+                const isGold = !isNavy;
+
+                const headerBg = isNavy
+                  ? "bg-slate-900 text-amber-300 font-bold border-slate-950"
+                  : "bg-amber-300 text-slate-950 font-bold border-amber-400";
+
+                const isColSelected =
+                  selectionRange !== null &&
+                  colIdx >= selectionRange.startCol &&
+                  colIdx <= selectionRange.endCol;
+
+                return (
+                  <th
+                    key={col.id}
+                    onDoubleClick={() => handleStartRenameColumn(col)}
+                    className={`relative border-b-2 border-r border-slate-400/40 px-3 py-2 text-left font-semibold text-xs tracking-wide select-none group transition-colors cursor-pointer ${headerBg} ${
+                      isColSelected ? "ring-2 ring-blue-500 ring-inset" : ""
+                    }`}
+                    title="Double click or hover menu to rename column"
+                  >
+                    {renamingColId === col.id ? (
+                      <div
+                        className="flex items-center gap-1"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="text"
+                          value={colRenameValue}
+                          onChange={(e) => setColRenameValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleSaveRenameColumn(col.id);
+                            if (e.key === "Escape") setRenamingColId(null);
+                          }}
+                          autoFocus
+                          className="w-full px-1.5 py-0.5 text-xs text-slate-950 bg-white rounded border border-blue-500 outline-none"
+                        />
+                        <button
+                          onClick={() => handleSaveRenameColumn(col.id)}
+                          className="p-1 hover:text-emerald-500"
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-1.5">
+                        <span className="truncate" title={col.name}>
+                          {col.name}
+                        </span>
+
+                        <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                          {col.type === "dropdown" && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onOpenDropdownModal(col);
+                              }}
+                              className={`p-1 rounded hover:bg-black/20 transition-colors ${
+                                isNavy ? "text-amber-300" : "text-slate-800"
+                              }`}
+                              title="Customize dropdown options"
+                            >
+                              <Settings2 className="h-3 w-3" />
+                            </button>
+                          )}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              setColumnMenu({
+                                colId: col.id,
+                                top: rect.bottom + 4,
+                                left: rect.left - 50,
+                              });
+                            }}
+                            className={`p-1 rounded hover:bg-black/20 transition-colors ${
+                              isNavy ? "text-amber-300" : "text-slate-800"
+                            }`}
+                            title="Column options"
+                          >
+                            <MoreHorizontal className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Draggable Column Width Resizer */}
+                    <div
+                      onMouseDown={(e) => startColumnResize(e, col)}
+                      className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-500 z-10"
+                      title="Drag to resize column"
+                    />
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+
+          {/* Table Body with Windowing for 1,000 Rows */}
+          <tbody>
+            {/* Top Spacer */}
+            {topSpacerHeight > 0 && (
+              <tr style={{ height: `${topSpacerHeight}px` }}>
+                <td colSpan={sheet.columns.length + 1} className="border-b border-slate-300" />
+              </tr>
+            )}
+
+            {/* Visible Rows */}
+            {visibleRowIndices.map((rowIdx) => {
+              const row = getRowAtIndex(rowIdx);
+
+              // Check if matches search
+              if (searchQuery.trim()) {
+                const q = searchQuery.toLowerCase();
+                const matches = Object.values(row.data).some((val) =>
+                  String(val || "").toLowerCase().includes(q)
+                );
+                if (!matches) return null;
+              }
+
+              const isRowSelected =
+                selectionRange !== null &&
+                rowIdx >= selectionRange.startRow &&
+                rowIdx <= selectionRange.endRow;
+
+              return (
+                <tr
+                  key={rowIdx}
+                  className={`h-9 border-b border-slate-300 transition-colors ${
+                    isRowSelected ? "bg-blue-50/20" : "hover:bg-slate-50/70"
+                  }`}
+                >
+                  {/* Sticky Row Number (1 to 1000+) */}
+                  <td
+                    className={`sticky left-0 z-10 text-center text-[11px] font-mono select-none cursor-pointer border-r border-b border-slate-300 transition-colors ${
+                      isRowSelected
+                        ? "bg-blue-100 font-bold text-blue-900 border-r-2 border-r-blue-600"
+                        : "bg-slate-100 hover:bg-slate-200 text-slate-500"
+                    }`}
+                    onClick={(e) => handleRowHeaderClick(e, rowIdx)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        rowId: row.id,
+                        colId: sheet.columns[0]?.id || "",
+                        rowIdx,
+                      });
+                    }}
+                  >
+                    {rowIdx + 1}
+                  </td>
+
+                  {/* 11 Data Cells */}
+                  {sheet.columns.map((col, colIdx) => {
+                    const cellVal = row.data[col.id] || "";
+                    const isActiveCell =
+                      activeCell?.rowIdx === rowIdx && activeCell?.colId === col.id;
+                    const isEditing =
+                      editingCell?.rowIdx === rowIdx && editingCell?.colId === col.id;
+                    const cellStyle = (row.styles && row.styles[col.id]) || {};
+
+                    const inSelection =
+                      selectionRange !== null &&
+                      rowIdx >= selectionRange.startRow &&
+                      rowIdx <= selectionRange.endRow &&
+                      colIdx >= selectionRange.startCol &&
+                      colIdx <= selectionRange.endCol;
+
+                    const isTopEdge = inSelection && rowIdx === selectionRange.startRow;
+                    const isBottomEdge = inSelection && rowIdx === selectionRange.endRow;
+                    const isLeftEdge = inSelection && colIdx === selectionRange.startCol;
+                    const isRightEdge = inSelection && colIdx === selectionRange.endCol;
+                    const isBottomRightCorner = isBottomEdge && isRightEdge;
+
+                    const inlineStyle: React.CSSProperties = {
+                      fontWeight: cellStyle.bold ? "bold" : "normal",
+                      fontStyle: cellStyle.italic ? "italic" : "normal",
+                      color: cellStyle.color || "#111827", // text-gray-900 high contrast
+                      backgroundColor: cellStyle.bgColor || undefined,
+                      textAlign: cellStyle.align || "left",
+                    };
+
+                    // Multi-cell selection background and continuous blue boundary
+                    if (isMultiCell && inSelection) {
+                      if (!isActiveCell) {
+                        inlineStyle.backgroundColor = "#dbeafe"; // bg-blue-100
+                      } else {
+                        inlineStyle.backgroundColor = "#eff6ff"; // bg-blue-50/80
+                      }
+
+                      // Inset box-shadow for continuous outer perimeter boundary
+                      const shadows: string[] = [];
+                      if (isTopEdge) shadows.push("inset 0 2px 0 0 #2563eb");
+                      if (isBottomEdge) shadows.push("inset 0 -2px 0 0 #2563eb");
+                      if (isLeftEdge) shadows.push("inset 2px 0 0 0 #2563eb");
+                      if (isRightEdge) shadows.push("inset -2px 0 0 0 #2563eb");
+                      if (shadows.length > 0) {
+                        inlineStyle.boxShadow = shadows.join(", ");
+                      }
+                    }
+
+                    const isPerimeter = isTopEdge || isBottomEdge || isLeftEdge || isRightEdge;
+
+                    return (
+                      <td
+                        key={col.id}
+                        onMouseDown={(e) => handleCellMouseDown(e, rowIdx, colIdx, col)}
+                        onMouseEnter={() => handleCellMouseEnter(rowIdx, colIdx)}
+                        onDoubleClick={() => startEditing(rowIdx, col)}
+                        onContextMenu={(e) => handleContextMenu(e, rowIdx, colIdx, col)}
+                        style={inlineStyle}
+                        className={`relative border-r border-b border-slate-300 px-3 py-1.5 transition-colors text-xs text-gray-900 font-normal overflow-hidden cursor-cell select-none ${
+                          !isMultiCell && isActiveCell
+                            ? "outline outline-2 outline-blue-600 -outline-offset-2 z-10 bg-blue-50/40"
+                            : isPerimeter
+                            ? "z-10"
+                            : inSelection
+                            ? "z-5"
+                            : ""
+                        }`}
+                      >
+                        {/* Google Sheets Active Cell / Multi-cell Range Drag Handle on bottom-right corner */}
+                        {((!isMultiCell && isActiveCell) || (isMultiCell && isBottomRightCorner)) && (
+                          <div className="absolute -bottom-1 -right-1 w-1.5 h-1.5 bg-blue-600 border border-white z-20 pointer-events-none shadow-xs" />
+                        )}
+
+                        {/* Subtle inner outline for active cell inside multi-cell selection */}
+                        {isMultiCell && isActiveCell && (
+                          <div className="absolute inset-0 outline outline-1 outline-blue-400 -outline-offset-1 pointer-events-none z-10" />
+                        )}
+
+                        {isEditing ? (
+                          <input
+                            ref={editInputRef}
+                            type="text"
+                            value={editValue}
+                            onChange={(e) => setEditValue(e.target.value)}
+                            onBlur={() => commitEdit()}
+                            className="absolute inset-0 w-full h-full px-3 text-xs bg-white text-gray-900 font-normal border-2 border-blue-600 outline-none z-20 select-text"
+                          />
+                        ) : col.type === "dropdown" ? (
+                          <div
+                            onClick={(e) => handleDropdownClick(e, rowIdx, colIdx, col)}
+                            className="flex items-center justify-between w-full cursor-pointer group/pill select-none"
+                          >
+                            {cellVal ? (
+                              <span
+                                className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium border flex items-center gap-1.5 truncate shadow-2xs select-none ${
+                                  STATUS_COLORS[cellVal]?.bg || "bg-slate-100"
+                                } ${
+                                  STATUS_COLORS[cellVal]?.text || "text-slate-900"
+                                } ${
+                                  STATUS_COLORS[cellVal]?.border || "border-slate-300"
+                                }`}
+                              >
+                                <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+                                <span className="truncate">{cellVal}</span>
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 italic text-[11px] select-none">
+                                Select status...
+                              </span>
+                            )}
+                            <ChevronDown className="h-3 w-3 text-slate-500 group-hover/pill:text-slate-900 transition-colors shrink-0 ml-1" />
+                          </div>
+                        ) : (
+                          <span
+                            className="block w-full truncate select-none text-gray-900"
+                            title={cellVal || undefined}
+                          >
+                            {cellVal ? cellVal : <span className="opacity-0 select-none">-</span>}
+                          </span>
+                        )}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+
+            {/* Bottom Spacer */}
+            {bottomSpacerHeight > 0 && (
+              <tr style={{ height: `${bottomSpacerHeight}px` }}>
+                <td colSpan={sheet.columns.length + 1} className="border-b border-slate-300" />
+              </tr>
+            )}
+          </tbody>
+        </table>
+
+        {/* Dynamic Row Expansion Footer (like Google Sheets) */}
+        <div className="p-4 bg-white border-b border-t border-slate-300 flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-slate-600 font-medium">Add</span>
+            <input
+              type="number"
+              min={10}
+              max={5000}
+              value={addMoreAmount}
+              onChange={(e) => setAddMoreAmount(Math.max(1, parseInt(e.target.value) || 100))}
+              className="w-20 px-2 py-1 text-xs border border-slate-300 rounded font-semibold text-center"
+            />
+            <span className="text-xs text-slate-600 font-medium">more rows at bottom</span>
+            <button
+              onClick={() => setExpandedRowCount((prev) => prev + addMoreAmount)}
+              className="px-3 py-1 bg-slate-900 hover:bg-slate-800 text-white rounded text-xs font-semibold flex items-center gap-1 shadow-2xs transition-colors"
+            >
+              <Plus className="h-3 w-3" />
+              <span>Add</span>
+            </button>
+          </div>
+
+          <div className="text-xs text-slate-400 border-l border-slate-200 pl-3">
+            Grid initialized with <strong className="text-slate-700">{totalRowCount.toLocaleString()}</strong> rows (Google Sheets Clean Slate Mode)
+          </div>
+        </div>
+      </div>
+
+      {/* Dropdown Options Popover Menu */}
+      {openDropdown && (
+        <div
+          style={{ top: `${openDropdown.top}px`, left: `${openDropdown.left}px` }}
+          className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 py-1.5 w-64 max-h-80 overflow-y-auto animate-in fade-in zoom-in-95"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100">
+            Select Follow-Up Status
+          </div>
+          {openDropdown.options.map((opt) => {
+            const colors = STATUS_COLORS[opt];
+            return (
+              <button
+                key={opt}
+                onClick={() => handleSelectDropdownOption(opt)}
+                className="w-full px-3 py-2 text-left text-xs hover:bg-slate-50 flex items-center gap-2 transition-colors font-medium text-slate-700"
+              >
+                <span
+                  className={`h-2.5 w-2.5 rounded-full shrink-0 ${
+                    colors ? colors.bg.replace("bg-", "bg-opacity-80 ") : "bg-slate-300"
+                  }`}
+                  style={{
+                    backgroundColor: colors ? undefined : "#94a3b8",
+                  }}
+                />
+                <span className="truncate">{opt}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Column Menu Popover */}
+      {columnMenu && (
+        <div
+          style={{ top: `${columnMenu.top}px`, left: `${columnMenu.left}px` }}
+          className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 py-1.5 w-48 text-slate-800 animate-in fade-in zoom-in-95 text-xs"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {(() => {
+            const col = sheet.columns.find((c) => c.id === columnMenu.colId);
+            if (!col) return null;
+            return (
+              <>
+                <div className="px-3 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100">
+                  Column: {col.name}
+                </div>
+                <button
+                  onClick={() => handleStartRenameColumn(col)}
+                  className="w-full px-3 py-1.5 text-left hover:bg-slate-100 flex items-center gap-2 font-medium"
+                >
+                  <Edit2 className="h-3.5 w-3.5 text-blue-600" />
+                  <span>Rename Column</span>
+                </button>
+                {col.type === "dropdown" && (
+                  <button
+                    onClick={() => {
+                      setColumnMenu(null);
+                      onOpenDropdownModal(col);
+                    }}
+                    className="w-full px-3 py-1.5 text-left hover:bg-slate-100 flex items-center gap-2 font-medium"
+                  >
+                    <Settings2 className="h-3.5 w-3.5 text-amber-600" />
+                    <span>Configure Options</span>
+                  </button>
+                )}
+                <div className="border-t border-slate-100 my-1" />
+                <button
+                  onClick={() => handleDeleteColumn(col.id)}
+                  className="w-full px-3 py-1.5 text-left hover:bg-rose-50 text-rose-600 flex items-center gap-2 font-medium"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>Delete Column</span>
+                </button>
+              </>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Right-Click Cell / Row Context Menu */}
+      {contextMenu && (
+        <div
+          style={{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }}
+          className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 py-1.5 w-52 text-slate-800 animate-in fade-in zoom-in-95 text-xs"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="px-3 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100">
+            Row #{contextMenu.rowIdx + 1} Actions
+          </div>
+          <button
+            onClick={() => {
+              onAddRowAt(contextMenu.rowIdx);
+              setContextMenu(null);
+            }}
+            className="w-full px-3 py-1.5 text-left hover:bg-slate-100 flex items-center gap-2 font-medium"
+          >
+            <ArrowUp className="h-3.5 w-3.5 text-blue-600" />
+            <span>Insert Row Above</span>
+          </button>
+          <button
+            onClick={() => {
+              onAddRowAt(contextMenu.rowIdx + 1);
+              setContextMenu(null);
+            }}
+            className="w-full px-3 py-1.5 text-left hover:bg-slate-100 flex items-center gap-2 font-medium"
+          >
+            <ArrowDown className="h-3.5 w-3.5 text-blue-600" />
+            <span>Insert Row Below</span>
+          </button>
+          <div className="border-t border-slate-100 my-1" />
+          <button
+            onClick={() => {
+              const row = getRowAtIndex(contextMenu.rowIdx);
+              const text = sheet.columns.map((c) => row.data[c.id] || "").join("\t");
+              navigator.clipboard.writeText(text);
+              setContextMenu(null);
+            }}
+            className="w-full px-3 py-1.5 text-left hover:bg-slate-100 flex items-center gap-2 font-medium"
+          >
+            <Copy className="h-3.5 w-3.5 text-slate-600" />
+            <span>Copy Row (TSV)</span>
+          </button>
+          <button
+            onClick={async () => {
+              await onUpdateCell(contextMenu.rowId, contextMenu.colId, "", contextMenu.rowIdx);
+              setContextMenu(null);
+            }}
+            className="w-full px-3 py-1.5 text-left hover:bg-slate-100 flex items-center gap-2 font-medium"
+          >
+            <Scissors className="h-3.5 w-3.5 text-slate-600" />
+            <span>Clear Cell Value</span>
+          </button>
+          <div className="border-t border-slate-100 my-1" />
+          <button
+            onClick={async () => {
+              await onDeleteRows([contextMenu.rowId]);
+              setContextMenu(null);
+            }}
+            className="w-full px-3 py-1.5 text-left hover:bg-rose-50 text-rose-600 flex items-center gap-2 font-medium"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            <span>Delete Row</span>
+          </button>
+        </div>
+      )}
+
+    </div>
+  );
+}

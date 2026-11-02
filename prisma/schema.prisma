@@ -1,0 +1,47 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model User {
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  name               String
+  password           String
+  role               String   @default("MEMBER") // "ADMIN" | "MEMBER"
+  mustChangePassword Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  sheets             Sheet[]
+}
+
+model Sheet {
+  id          String    @id @default(cuid())
+  name        String
+  userId      String?   // Linked team member user id if owned by member
+  user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
+  order       Int       @default(0)
+  columns     String    // JSON array of column definitions
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  rows        Row[]
+
+  @@index([userId])
+}
+
+model Row {
+  id          String   @id @default(cuid())
+  sheetId     String
+  sheet       Sheet    @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  order       Int      @default(0)
+  data        String   // JSON string of { [columnId]: value }
+  styles      String?  // JSON string of { [columnId]: { bold, italic, color, bgColor, align } }
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([sheetId])
+}
