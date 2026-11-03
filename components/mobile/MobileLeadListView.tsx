@@ -2,7 +2,8 @@
 
 import React, { useMemo } from "react";
 import { SheetDetail, RowData, ColumnDef } from "@/lib/types";
-import { isValidLead } from "@/lib/leads";
+import { isValidLead, getLeadStatus, getLeadFollowupDate, rowMatchesStatusFilter } from "@/lib/leads";
+import { STATUS_COLORS } from "@/lib/defaults";
 import {
   User,
   Phone,
@@ -11,11 +12,14 @@ import {
   Users,
   Search,
   Sparkles,
+  Calendar,
+  Building,
 } from "lucide-react";
 
 interface MobileLeadListViewProps {
   sheet: SheetDetail;
   searchQuery: string;
+  statusFilter?: string | null;
   onEditLead: (row: RowData) => void;
   onAddNewLead: () => void;
 }
@@ -23,6 +27,7 @@ interface MobileLeadListViewProps {
 export function MobileLeadListView({
   sheet,
   searchQuery,
+  statusFilter = null,
   onEditLead,
   onAddNewLead,
 }: MobileLeadListViewProps) {
@@ -31,13 +36,17 @@ export function MobileLeadListView({
     return sheet.rows.filter((r) => {
       if (!isValidLead(r.data)) return false;
 
+      if (statusFilter && !rowMatchesStatusFilter(r.data, statusFilter, sheet.columns)) {
+        return false;
+      }
+
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase();
       return Object.values(r.data || {}).some((val) =>
         String(val || "").toLowerCase().includes(q)
       );
     });
-  }, [sheet.rows, searchQuery]);
+  }, [sheet.rows, searchQuery, statusFilter, sheet.columns]);
 
   return (
     <div className="flex-1 flex flex-col bg-slate-100 overflow-y-auto relative pb-28">
@@ -87,28 +96,67 @@ export function MobileLeadListView({
             const number = row.data[numberKey] || "No Phone Number";
             const initial = name.charAt(0).toUpperCase() || "?";
 
+            const projectCol = sheet.columns.find((c) => c.id === "col_project_name") || sheet.columns[0];
+            const projectName = projectCol ? row.data[projectCol.id] : row.data["col_project_name"];
+
+            const latestStatus = getLeadStatus(row.data, sheet.columns);
+            const latestDate = getLeadFollowupDate(row.data, sheet.columns);
+            const statusStyle = latestStatus !== "Unassigned" ? STATUS_COLORS[latestStatus] : null;
+
             return (
               <div
                 key={row.id}
                 onClick={() => onEditLead(row)}
                 className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-2xs hover:shadow-xs active:bg-slate-50 active:scale-[0.99] transition-all flex items-center justify-between gap-3 cursor-pointer select-none"
               >
-                {/* Left: Avatar Initial & Name + Number */}
-                <div className="flex items-center gap-3 min-w-0">
+                {/* Left: Avatar Initial & Name + Details */}
+                <div className="flex items-center gap-3 min-w-0 flex-1">
                   <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-slate-900 to-slate-800 text-amber-400 font-bold text-sm flex items-center justify-center shrink-0 shadow-inner border border-slate-700">
                     {initial}
                   </div>
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     {/* Name */}
                     <h4 className="text-sm font-bold text-slate-900 truncate leading-snug">
                       {name}
                     </h4>
 
-                    {/* Number */}
-                    <div className="flex items-center gap-1.5 text-xs text-slate-600 font-mono mt-0.5">
-                      <Phone className="h-3 w-3 text-slate-400 shrink-0" />
-                      <span className="truncate">{number}</span>
+                    {/* Number & Project */}
+                    <div className="flex items-center gap-2 text-xs text-slate-600 font-mono mt-0.5 flex-wrap">
+                      <div className="flex items-center gap-1">
+                        <Phone className="h-3 w-3 text-slate-400 shrink-0" />
+                        <span className="truncate">{number}</span>
+                      </div>
+                      {projectName && (
+                        <div className="flex items-center gap-1 font-sans text-slate-500 font-normal">
+                          <span className="text-slate-300">•</span>
+                          <span className="truncate max-w-[120px]">{projectName}</span>
+                        </div>
+                      )}
                     </div>
+
+                    {/* Status & Date Badges */}
+                    {(latestStatus !== "Unassigned" || latestDate) && (
+                      <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                        {latestStatus !== "Unassigned" && (
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border flex items-center gap-1 ${
+                              statusStyle?.bg || "bg-slate-100"
+                            } ${statusStyle?.text || "text-slate-800"} ${
+                              statusStyle?.border || "border-slate-300"
+                            }`}
+                          >
+                            <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+                            <span className="truncate max-w-[140px]">{latestStatus}</span>
+                          </span>
+                        )}
+                        {latestDate && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-800 border border-blue-200 flex items-center gap-1">
+                            <Calendar className="h-2.5 w-2.5 text-blue-600" />
+                            <span>{latestDate}</span>
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 

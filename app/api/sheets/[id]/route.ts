@@ -6,6 +6,73 @@ interface Params {
   params: { id: string };
 }
 
+function ensureFollowupDateColumns(columns: any[]): { columns: any[]; modified: boolean } {
+  if (!Array.isArray(columns)) return { columns, modified: false };
+  const newCols: any[] = [];
+  let modified = false;
+
+  for (let i = 0; i < columns.length; i++) {
+    const col = columns[i];
+    newCols.push(col);
+
+    if (col.id === "col_followup_1") {
+      const hasDate = columns.some((c) => c.id === "col_followup_1_date");
+      if (!hasDate) {
+        newCols.push({
+          id: "col_followup_1_date",
+          name: "1st Follow Up Date",
+          type: "date",
+          width: 155,
+          headerStyle: "navy",
+          options: [],
+        });
+        modified = true;
+      }
+    } else if (col.id === "col_followup_2") {
+      const hasDate = columns.some((c) => c.id === "col_followup_2_date");
+      if (!hasDate) {
+        newCols.push({
+          id: "col_followup_2_date",
+          name: "2nd Follow Up Date",
+          type: "date",
+          width: 155,
+          headerStyle: "navy",
+          options: [],
+        });
+        modified = true;
+      }
+    } else if (col.id === "col_followup_3") {
+      const hasDate = columns.some((c) => c.id === "col_followup_3_date");
+      if (!hasDate) {
+        newCols.push({
+          id: "col_followup_3_date",
+          name: "3rd Follow Up Date",
+          type: "date",
+          width: 155,
+          headerStyle: "navy",
+          options: [],
+        });
+        modified = true;
+      }
+    } else if (col.id === "col_followup_4") {
+      const hasDate = columns.some((c) => c.id === "col_followup_4_date");
+      if (!hasDate) {
+        newCols.push({
+          id: "col_followup_4_date",
+          name: "4th Follow Up Date",
+          type: "date",
+          width: 155,
+          headerStyle: "navy",
+          options: [],
+        });
+        modified = true;
+      }
+    }
+  }
+
+  return { columns: newCols, modified };
+}
+
 // GET /api/sheets/[id] - Fetch single sheet with its rows
 export async function GET(req: Request, { params }: Params) {
   const user = await getSessionUser();
@@ -40,15 +107,42 @@ export async function GET(req: Request, { params }: Params) {
       );
     }
 
-    const formattedRows = sheet.rows.map((r) => ({
-      id: r.id,
-      sheetId: r.sheetId,
-      order: r.order,
-      data: JSON.parse(r.data || "{}"),
-      styles: JSON.parse(r.styles || "{}"),
-      createdAt: r.createdAt.toISOString(),
-      updatedAt: r.updatedAt.toISOString(),
-    }));
+    let parsedCols = JSON.parse(sheet.columns || "[]");
+    const { columns: updatedCols, modified } = ensureFollowupDateColumns(parsedCols);
+    if (modified) {
+      // Auto-migrate sheet columns in DB to include follow up date columns
+      await prisma.sheet.update({
+        where: { id: sheet.id },
+        data: { columns: JSON.stringify(updatedCols) },
+      }).catch(console.error);
+      parsedCols = updatedCols;
+    }
+
+    const formattedRows = sheet.rows.map((r) => {
+      const data = JSON.parse(r.data || "{}");
+      if (r.followup1Date && !data.col_followup_1_date) {
+        data.col_followup_1_date = r.followup1Date.toISOString().split("T")[0];
+      }
+      if (r.followup2Date && !data.col_followup_2_date) {
+        data.col_followup_2_date = r.followup2Date.toISOString().split("T")[0];
+      }
+      if (r.followup3Date && !data.col_followup_3_date) {
+        data.col_followup_3_date = r.followup3Date.toISOString().split("T")[0];
+      }
+      if (r.followup4Date && !data.col_followup_4_date) {
+        data.col_followup_4_date = r.followup4Date.toISOString().split("T")[0];
+      }
+
+      return {
+        id: r.id,
+        sheetId: r.sheetId,
+        order: r.order,
+        data,
+        styles: JSON.parse(r.styles || "{}"),
+        createdAt: r.createdAt.toISOString(),
+        updatedAt: r.updatedAt.toISOString(),
+      };
+    });
 
     return NextResponse.json({
       sheet: {
@@ -56,7 +150,7 @@ export async function GET(req: Request, { params }: Params) {
         name: sheet.name,
         userId: sheet.userId,
         order: sheet.order,
-        columns: JSON.parse(sheet.columns || "[]"),
+        columns: parsedCols,
         rows: formattedRows,
         user: sheet.user,
       },

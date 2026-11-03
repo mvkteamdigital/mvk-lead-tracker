@@ -3,8 +3,10 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { SheetMeta, SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
-import { isValidLead } from "@/lib/leads";
+import { isValidLead, getLeadStatus, rowMatchesStatusFilter } from "@/lib/leads";
+import { DEFAULT_FOLLOWUP_OPTIONS } from "@/lib/defaults";
 import { TopToolbar } from "./TopToolbar";
+import { StatusFilterBar } from "./StatusFilterBar";
 import { FormulaBar } from "./FormulaBar";
 import { SpreadsheetGrid } from "./SpreadsheetGrid";
 import { BottomTabBar } from "./BottomTabBar";
@@ -50,11 +52,59 @@ export function SpreadsheetApp() {
   const [isLeadFormModalOpen, setIsLeadFormModalOpen] = useState(false);
   const [editingLeadForModal, setEditingLeadForModal] = useState<RowData | null>(null);
 
+  // Dynamic Status Filter state
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
+
+  // Reset status filter when switching sheets
+  useEffect(() => {
+    setStatusFilter(null);
+  }, [activeSheetId]);
+
   // Derived state: accurately count valid leads for the active sheet in real-time
   const activeSheetValidLeadCount = useMemo(() => {
     if (!activeSheet || !activeSheet.rows) return 0;
     return activeSheet.rows.filter((r) => isValidLead(r.data)).length;
   }, [activeSheet]);
+
+  // Dynamically extract all available custom dropdown options from the active sheet.
+  // When a user adds an option via "Customize Dropdowns", activeSheet.columns updates,
+  // and the filter bar reflects the new option automatically!
+  const availableStatusOptions = useMemo(() => {
+    const optionsSet = new Set<string>();
+    if (activeSheet?.columns) {
+      activeSheet.columns.forEach((col) => {
+        if (col.type === "dropdown" && Array.isArray(col.options)) {
+          col.options.forEach((opt) => {
+            if (opt && opt.trim()) optionsSet.add(opt.trim());
+          });
+        }
+      });
+    }
+    if (optionsSet.size === 0) {
+      DEFAULT_FOLLOWUP_OPTIONS.forEach((opt) => optionsSet.add(opt));
+    }
+    return Array.from(optionsSet);
+  }, [activeSheet?.columns]);
+
+  // Real-time summary metric counters for each status option + Unassigned
+  const statusCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    if (!activeSheet || !activeSheet.rows) return counts;
+
+    const validRows = activeSheet.rows.filter((r) => isValidLead(r.data));
+
+    availableStatusOptions.forEach((opt) => {
+      counts[opt] = validRows.filter((r) =>
+        rowMatchesStatusFilter(r.data, opt, activeSheet.columns)
+      ).length;
+    });
+
+    counts["Unassigned"] = validRows.filter(
+      (r) => getLeadStatus(r.data, activeSheet.columns) === "Unassigned"
+    ).length;
+
+    return counts;
+  }, [activeSheet, availableStatusOptions]);
 
   // Derived state: sheet list with reactive real-time valid lead count for the active tab
   const displayedSheets = useMemo(() => {
@@ -225,6 +275,52 @@ export function SpreadsheetApp() {
       fetchActiveSheetDetail(activeSheetId);
     }
   }, [activeSheetId, fetchActiveSheetDetail]);
+
+  // Synchronized Multi-User Access: Manual and automated background sync from shared Neon Postgres
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const handleRefreshFromDB = useCallback(async () => {
+    if (!activeSheetId || isRefreshing) return;
+    try {
+      setIsRefreshing(true);
+      const [sheetRes, sheetsRes] = await Promise.all([
+        fetch(`/api/sheets/${activeSheetId}`),
+        fetch("/api/sheets"),
+      ]);
+      if (sheetRes.ok) {
+        const data = await sheetRes.json();
+        setActiveSheet((prev) => {
+          if (!prev || prev.id !== activeSheetId) return prev;
+          return {
+            ...prev,
+            columns: data.sheet.columns,
+            rows: data.sheet.rows,
+          };
+        });
+      }
+      if (sheetsRes.ok) {
+        const data = await sheetsRes.json();
+        setSheets(data.sheets || []);
+      }
+    } catch (err) {
+      console.error("Multi-user sync error:", err);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [activeSheetId, isRefreshing]);
+
+  // Synchronized Multi-User Access: Polling every 15 seconds so CEO / Admins and members stay in sync
+  useEffect(() => {
+    if (!activeSheetId) return;
+
+    const interval = setInterval(() => {
+      if (savingStatus !== "saving") {
+        handleRefreshFromDB();
+      }
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [activeSheetId, savingStatus, handleRefreshFromDB]);
 
   // Get active cell value
   const getActiveCellValue = (): string => {
@@ -650,9 +746,27 @@ export function SpreadsheetApp() {
         onRedo={handleRedo}
         canUndo={undoStack.length > 0}
         canRedo={redoStack.length > 0}
+        totalLeads={activeSheetValidLeadCount}
+        onRefresh={handleRefreshFromDB}
+        isRefreshing={isRefreshing}
       />
 
-      {/* 2. Formula Bar (Desktop Only) */}
+      {/* 2. Dynamic Status Filter Bar & Summary Metrics (Mobile & Desktop) */}
+      <StatusFilterBar
+        totalLeads={activeSheetValidLeadCount}
+        availableStatuses={availableStatusOptions}
+        statusCounts={statusCounts}
+        activeFilter={statusFilter}
+        onSelectFilter={setStatusFilter}
+        onOpenDropdownModal={() => {
+          const dropdownCol =
+            activeSheet?.columns.find((c) => c.type === "dropdown") || null;
+          setSelectedColumnForDropdown(dropdownCol);
+          setIsDropdownModalOpen(true);
+        }}
+      />
+
+      {/* 3. Formula Bar (Desktop Only) */}
       <div className="hidden md:block">
         <FormulaBar
           activeCell={activeCell}
@@ -674,7 +788,7 @@ export function SpreadsheetApp() {
         />
       </div>
 
-      {/* 3. Main Content Area */}
+      {/* 4. Main Content Area */}
       <div className="flex-1 relative overflow-hidden flex flex-col">
         {errorMsg ? (
           <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
@@ -697,11 +811,12 @@ export function SpreadsheetApp() {
           </div>
         ) : activeSheet ? (
           <>
-            {/* Mobile View: Vertical Card List (ONLY Name & Number) with Tap-to-Edit */}
+            {/* Mobile View: Vertical Card List with Status & Date Indicators & Tap-to-Edit */}
             <div className="block md:hidden flex-1 overflow-hidden flex flex-col min-h-0">
               <MobileLeadListView
                 sheet={activeSheet}
                 searchQuery={searchQuery}
+                statusFilter={statusFilter}
                 onEditLead={(lead) => {
                   setEditingLeadForModal(lead);
                   setIsLeadFormModalOpen(true);
@@ -729,6 +844,7 @@ export function SpreadsheetApp() {
                 activeCell={activeCell}
                 setActiveCell={setActiveCell}
                 searchQuery={searchQuery}
+                statusFilter={statusFilter}
                 onUndo={handleUndo}
                 onRedo={handleRedo}
                 canUndo={undoStack.length > 0}

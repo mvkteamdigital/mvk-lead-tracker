@@ -64,7 +64,7 @@ export function LeadFormModal({
     return col?.options && col.options.length > 0 ? col.options : DEFAULT_FOLLOWUP_OPTIONS;
   };
 
-  // Detect any additional custom columns added beyond the standard 11
+  // Detect any additional custom columns added beyond the standard 15
   const standardIds = new Set([
     "col_name",
     "col_number",
@@ -73,14 +73,18 @@ export function LeadFormModal({
     "col_budget",
     "col_location",
     "col_followup_1",
+    "col_followup_1_date",
     "col_followup_2",
+    "col_followup_2_date",
     "col_followup_3",
+    "col_followup_3_date",
     "col_followup_4",
+    "col_followup_4_date",
     "col_remarks",
   ]);
 
   const customColumns = columns.filter(
-    (col, idx) => !standardIds.has(col.id) && idx >= 11
+    (col) => !standardIds.has(col.id)
   );
 
   useEffect(() => {
@@ -298,87 +302,174 @@ export function LeadFormModal({
             </div>
           </div>
 
-          {/* SECTION 3: The 4 Follow-Up Dropdowns - Dynamically bound to grid headers & options */}
+          {/* SECTION 3: The 4 Follow-Up Dropdowns & Date Pickers */}
           <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-3">
-            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
-              <Calendar className="h-3.5 w-3.5 text-purple-600" />
-              <span>Follow-Up Progression</span>
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
+              <div className="flex items-center gap-1">
+                <Calendar className="h-3.5 w-3.5 text-purple-600" />
+                <span>Follow-Up Stages & Scheduled Dates</span>
+              </div>
+              <span className="text-[10px] text-slate-400 font-normal">Next step reminders</span>
             </div>
 
             {/* 1st Follow Up */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {getColName("col_followup_1", 6, "1st Follow Up")}
-              </label>
-              <select
-                value={formData["col_followup_1"] || ""}
-                onChange={(e) => handleChange("col_followup_1", e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
-              >
-                <option value="">-- Select Status --</option>
-                {getColOptions("col_followup_1", 6).map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt}
-                  </option>
-                ))}
-              </select>
+            <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs text-slate-800">
+                  {getColName("col_followup_1", 6, "1st Follow Up")}
+                </span>
+                <span className="text-[10px] text-purple-700 bg-purple-50 px-2 py-0.5 rounded-full font-bold border border-purple-200">
+                  Stage 1
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Status</label>
+                  <select
+                    value={formData["col_followup_1"] || ""}
+                    onChange={(e) => handleChange("col_followup_1", e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+                  >
+                    <option value="">-- Select Status --</option>
+                    {getColOptions("col_followup_1", 6).map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                    {getColName("col_followup_1_date", 7, "1st Follow Up Date")}
+                  </label>
+                  <input
+                    type="date"
+                    value={formData["col_followup_1_date"] || ""}
+                    onChange={(e) => handleChange("col_followup_1_date", e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800 font-medium"
+                  />
+                </div>
+              </div>
             </div>
 
             {/* 2nd Follow Up */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {getColName("col_followup_2", 7, "2nd Follow Up")}
-              </label>
-              <select
-                value={formData["col_followup_2"] || ""}
-                onChange={(e) => handleChange("col_followup_2", e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
-              >
-                <option value="">-- Select Status --</option>
-                {getColOptions("col_followup_2", 7).map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt}
-                  </option>
-                ))}
-              </select>
+            <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs text-slate-800">
+                  {getColName("col_followup_2", 8, "2nd Follow Up")}
+                </span>
+                <span className="text-[10px] text-purple-700 bg-purple-50 px-2 py-0.5 rounded-full font-bold border border-purple-200">
+                  Stage 2
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Status</label>
+                  <select
+                    value={formData["col_followup_2"] || ""}
+                    onChange={(e) => handleChange("col_followup_2", e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+                  >
+                    <option value="">-- Select Status --</option>
+                    {getColOptions("col_followup_2", 8).map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                    {getColName("col_followup_2_date", 9, "2nd Follow Up Date")}
+                  </label>
+                  <input
+                    type="date"
+                    value={formData["col_followup_2_date"] || ""}
+                    onChange={(e) => handleChange("col_followup_2_date", e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800 font-medium"
+                  />
+                </div>
+              </div>
             </div>
 
             {/* 3rd Follow Up */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {getColName("col_followup_3", 8, "3rd Follow Up")}
-              </label>
-              <select
-                value={formData["col_followup_3"] || ""}
-                onChange={(e) => handleChange("col_followup_3", e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
-              >
-                <option value="">-- Select Status --</option>
-                {getColOptions("col_followup_3", 8).map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt}
-                  </option>
-                ))}
-              </select>
+            <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs text-slate-800">
+                  {getColName("col_followup_3", 10, "3rd Follow Up")}
+                </span>
+                <span className="text-[10px] text-purple-700 bg-purple-50 px-2 py-0.5 rounded-full font-bold border border-purple-200">
+                  Stage 3
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Status</label>
+                  <select
+                    value={formData["col_followup_3"] || ""}
+                    onChange={(e) => handleChange("col_followup_3", e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+                  >
+                    <option value="">-- Select Status --</option>
+                    {getColOptions("col_followup_3", 10).map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                    {getColName("col_followup_3_date", 11, "3rd Follow Up Date")}
+                  </label>
+                  <input
+                    type="date"
+                    value={formData["col_followup_3_date"] || ""}
+                    onChange={(e) => handleChange("col_followup_3_date", e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800 font-medium"
+                  />
+                </div>
+              </div>
             </div>
 
             {/* 4th Follow Up */}
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {getColName("col_followup_4", 9, "4th Follow Up")}
-              </label>
-              <select
-                value={formData["col_followup_4"] || ""}
-                onChange={(e) => handleChange("col_followup_4", e.target.value)}
-                className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
-              >
-                <option value="">-- Select Status --</option>
-                {getColOptions("col_followup_4", 9).map((opt) => (
-                  <option key={opt} value={opt}>
-                    {opt}
-                  </option>
-                ))}
-              </select>
+            <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs text-slate-800">
+                  {getColName("col_followup_4", 12, "4th Follow Up")}
+                </span>
+                <span className="text-[10px] text-purple-700 bg-purple-50 px-2 py-0.5 rounded-full font-bold border border-purple-200">
+                  Stage 4
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">Status</label>
+                  <select
+                    value={formData["col_followup_4"] || ""}
+                    onChange={(e) => handleChange("col_followup_4", e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+                  >
+                    <option value="">-- Select Status --</option>
+                    {getColOptions("col_followup_4", 12).map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                    {getColName("col_followup_4_date", 13, "4th Follow Up Date")}
+                  </label>
+                  <input
+                    type="date"
+                    value={formData["col_followup_4_date"] || ""}
+                    onChange={(e) => handleChange("col_followup_4_date", e.target.value)}
+                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800 font-medium"
+                  />
+                </div>
+              </div>
             </div>
           </div>
 

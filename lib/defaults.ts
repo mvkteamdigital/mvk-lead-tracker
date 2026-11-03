@@ -63,33 +63,65 @@ export const DEFAULT_COLUMNS: ColumnDef[] = [
     id: "col_followup_1",
     name: "1st Follow Up",
     type: "dropdown",
-    width: 220,
+    width: 200,
     headerStyle: "navy",
     options: DEFAULT_FOLLOWUP_OPTIONS
+  },
+  {
+    id: "col_followup_1_date",
+    name: "1st Follow Up Date",
+    type: "date",
+    width: 155,
+    headerStyle: "navy",
+    options: []
   },
   {
     id: "col_followup_2",
     name: "2nd Follow Up",
     type: "dropdown",
-    width: 220,
+    width: 200,
     headerStyle: "navy",
     options: DEFAULT_FOLLOWUP_OPTIONS
+  },
+  {
+    id: "col_followup_2_date",
+    name: "2nd Follow Up Date",
+    type: "date",
+    width: 155,
+    headerStyle: "navy",
+    options: []
   },
   {
     id: "col_followup_3",
     name: "3rd Follow Up",
     type: "dropdown",
-    width: 220,
+    width: 200,
     headerStyle: "navy",
     options: DEFAULT_FOLLOWUP_OPTIONS
+  },
+  {
+    id: "col_followup_3_date",
+    name: "3rd Follow Up Date",
+    type: "date",
+    width: 155,
+    headerStyle: "navy",
+    options: []
   },
   {
     id: "col_followup_4",
     name: "4th Follow Up",
     type: "dropdown",
-    width: 220,
+    width: 200,
     headerStyle: "navy",
     options: DEFAULT_FOLLOWUP_OPTIONS
+  },
+  {
+    id: "col_followup_4_date",
+    name: "4th Follow Up Date",
+    type: "date",
+    width: 155,
+    headerStyle: "navy",
+    options: []
   },
   {
     id: "col_remarks",

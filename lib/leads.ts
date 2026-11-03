@@ -1,5 +1,7 @@
+import { ColumnDef } from "./types";
+
 /**
- * Utility functions for lead validation and counting.
+ * Utility functions for lead validation, status tracking, and counting.
  */
 
 // Set of default dropdown placeholders and statuses to ignore when counting leads
@@ -108,4 +110,122 @@ export function isValidLead(rowData: Record<string, any> | string | undefined | 
   if (isAlphanumericText(projectVal)) return true;
 
   return false;
+}
+
+/**
+ * Gets the latest recorded follow-up status for a lead.
+ * Checks follow-up columns in reverse chronological order (4th -> 3rd -> 2nd -> 1st).
+ * Returns "Unassigned" if no status is chosen yet.
+ */
+export function getLeadStatus(
+  rowData: Record<string, any> | undefined | null,
+  columns?: ColumnDef[]
+): string {
+  if (!rowData || typeof rowData !== "object") return "Unassigned";
+
+  // Find all dropdown columns or follow-up columns
+  const followUpKeys = (columns || [])
+    .filter((c) => c.type === "dropdown" || c.id.includes("followup"))
+    .map((c) => c.id);
+
+  const keysToCheck =
+    followUpKeys.length > 0
+      ? followUpKeys.slice().reverse()
+      : ["col_followup_4", "col_followup_3", "col_followup_2", "col_followup_1"];
+
+  for (const k of keysToCheck) {
+    const val = rowData[k];
+    if (val && typeof val === "string") {
+      const trimmed = val.trim();
+      if (
+        trimmed &&
+        !trimmed.toLowerCase().includes("select") &&
+        !trimmed.toLowerCase().includes("choose")
+      ) {
+        return trimmed;
+      }
+    }
+  }
+
+  return "Unassigned";
+}
+
+/**
+ * Gets the latest recorded follow-up date for a lead.
+ * Corresponds to the most recent follow-up date entry.
+ */
+export function getLeadFollowupDate(
+  rowData: Record<string, any> | undefined | null,
+  columns?: ColumnDef[]
+): string | null {
+  if (!rowData || typeof rowData !== "object") return null;
+
+  // Find all date columns
+  const dateKeys = (columns || [])
+    .filter((c) => c.type === "date" || c.id.includes("date"))
+    .map((c) => c.id);
+
+  const keysToCheck =
+    dateKeys.length > 0
+      ? dateKeys.slice().reverse()
+      : [
+          "col_followup_4_date",
+          "col_followup_3_date",
+          "col_followup_2_date",
+          "col_followup_1_date",
+        ];
+
+  for (const k of keysToCheck) {
+    const val = rowData[k];
+    if (val && typeof val === "string") {
+      const trimmed = val.trim();
+      if (trimmed) return trimmed;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Checks whether a row matches an active status filter.
+ * When statusFilter is null, returns true for all rows.
+ * When statusFilter is set, checks if any follow-up column on that lead has that status,
+ * or if statusFilter is "Unassigned", checks if no follow-up status has been set.
+ */
+export function rowMatchesStatusFilter(
+  rowData: Record<string, any> | undefined | null,
+  statusFilter: string | null,
+  columns?: ColumnDef[]
+): boolean {
+  if (!statusFilter) return true;
+  if (!rowData || typeof rowData !== "object") return false;
+
+  const currentStatus = getLeadStatus(rowData, columns);
+
+  if (statusFilter === "Unassigned") {
+    return currentStatus === "Unassigned";
+  }
+
+  // Check if primary status matches
+  if (currentStatus.toLowerCase() === statusFilter.toLowerCase()) {
+    return true;
+  }
+
+  // Also check if any other follow-up column matches this status
+  const followUpKeys = (columns || [])
+    .filter((c) => c.type === "dropdown" || c.id.includes("followup"))
+    .map((c) => c.id);
+
+  const keysToCheck =
+    followUpKeys.length > 0
+      ? followUpKeys
+      : ["col_followup_1", "col_followup_2", "col_followup_3", "col_followup_4"];
+
+  return keysToCheck.some((k) => {
+    const val = rowData[k];
+    return (
+      typeof val === "string" &&
+      val.trim().toLowerCase() === statusFilter.toLowerCase()
+    );
+  });
 }

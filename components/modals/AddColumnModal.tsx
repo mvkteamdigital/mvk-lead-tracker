@@ -18,7 +18,7 @@ export function AddColumnModal({
   if (!isOpen) return null;
 
   const [name, setName] = useState("");
-  const [type, setType] = useState<"text" | "dropdown" | "number">("text");
+  const [type, setType] = useState<"text" | "dropdown" | "number" | "date">("text");
   const [headerStyle, setHeaderStyle] = useState<"gold" | "navy" | "emerald" | "purple" | "default">("gold");
   const [dropdownOptionsText, setDropdownOptionsText] = useState("Interested, Call Back, Closed");
   const [saving, setSaving] = useState(false);
@@ -110,10 +110,11 @@ export function AddColumnModal({
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">
               Column Data Type
             </label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-1.5">
               {[
                 { id: "text", label: "Text" },
                 { id: "dropdown", label: "Dropdown" },
+                { id: "date", label: "Date" },
                 { id: "number", label: "Number" },
               ].map((item) => (
                 <button

@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
 import { STATUS_COLORS } from "@/lib/defaults";
+import { rowMatchesStatusFilter } from "@/lib/leads";
 import {
   ChevronDown,
   Trash2,
@@ -16,6 +17,7 @@ import {
   ArrowUp,
   ArrowDown,
   Layers,
+  Calendar,
 } from "lucide-react";
 
 interface SpreadsheetGridProps {
@@ -29,6 +31,7 @@ interface SpreadsheetGridProps {
   activeCell: { rowIdx: number; colId: string; colName: string } | null;
   setActiveCell: (cell: { rowIdx: number; colId: string; colName: string } | null) => void;
   searchQuery: string;
+  statusFilter?: string | null;
   onUndo?: () => void;
   onRedo?: () => void;
   canUndo?: boolean;
@@ -49,6 +52,7 @@ export function SpreadsheetGrid({
   activeCell,
   setActiveCell,
   searchQuery,
+  statusFilter = null,
   onUndo,
   onRedo,
   canUndo,
@@ -1086,6 +1090,11 @@ export function SpreadsheetGrid({
             {visibleRowIndices.map((rowIdx) => {
               const row = getRowAtIndex(rowIdx);
 
+              // Check if matches status filter
+              if (statusFilter && !rowMatchesStatusFilter(row.data, statusFilter, sheet.columns)) {
+                return null;
+              }
+
               // Check if matches search
               if (searchQuery.trim()) {
                 const q = searchQuery.toLowerCase();
@@ -1211,11 +1220,11 @@ export function SpreadsheetGrid({
                         {isEditing ? (
                           <input
                             ref={editInputRef}
-                            type="text"
+                            type={col.type === "date" ? "date" : col.type === "number" ? "number" : "text"}
                             value={editValue}
                             onChange={(e) => setEditValue(e.target.value)}
                             onBlur={() => commitEdit()}
-                            className="absolute inset-0 w-full h-full px-3 text-xs bg-white text-gray-900 font-normal border-2 border-blue-600 outline-none z-20 select-text"
+                            className="absolute inset-0 w-full h-full px-2 text-xs bg-white text-gray-900 font-medium border-2 border-blue-600 outline-none z-20 select-text"
                           />
                         ) : col.type === "dropdown" ? (
                           <div
@@ -1241,6 +1250,23 @@ export function SpreadsheetGrid({
                               </span>
                             )}
                             <ChevronDown className="h-3 w-3 text-slate-500 group-hover/pill:text-slate-900 transition-colors shrink-0 ml-1" />
+                          </div>
+                        ) : col.type === "date" ? (
+                          <div
+                            onClick={() => startEditing(rowIdx, col)}
+                            className="flex items-center justify-between w-full cursor-pointer group/date select-none text-xs"
+                          >
+                            {cellVal ? (
+                              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-50/80 text-blue-900 font-medium border border-blue-200/80 text-[11px] truncate shadow-2xs">
+                                <Calendar className="h-3 w-3 text-blue-600 shrink-0" />
+                                <span className="truncate">{cellVal}</span>
+                              </span>
+                            ) : (
+                              <span className="text-slate-400 italic text-[11px] flex items-center gap-1 opacity-70 group-hover/date:opacity-100 transition-opacity">
+                                <Calendar className="h-3 w-3 text-slate-400 shrink-0" />
+                                <span>Pick date...</span>
+                              </span>
+                            )}
                           </div>
                         ) : (
                           <span

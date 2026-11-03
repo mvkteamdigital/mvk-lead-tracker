@@ -6,6 +6,33 @@ interface Params {
   params: { id: string };
 }
 
+// Helper to parse date string into valid Date or null
+function parseDateValue(val: any): Date | null {
+  if (!val || typeof val !== "string") return null;
+  const trimmed = val.trim();
+  if (!trimmed) return null;
+  const d = new Date(trimmed);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// Helper to extract follow-up dates from JSON data object
+function extractFollowupDates(dataObj: Record<string, any>) {
+  if (!dataObj || typeof dataObj !== "object") {
+    return {
+      followup1Date: null,
+      followup2Date: null,
+      followup3Date: null,
+      followup4Date: null,
+    };
+  }
+  return {
+    followup1Date: parseDateValue(dataObj.col_followup_1_date),
+    followup2Date: parseDateValue(dataObj.col_followup_2_date),
+    followup3Date: parseDateValue(dataObj.col_followup_3_date),
+    followup4Date: parseDateValue(dataObj.col_followup_4_date),
+  };
+}
+
 // Check sheet permission helper
 async function checkSheetAccess(sheetId: string, userId: string, role: string) {
   const sheet = await prisma.sheet.findUnique({
@@ -48,12 +75,14 @@ export async function POST(req: Request, { params }: Params) {
     const createdRows = [];
     for (const item of rowsToAdd) {
       const orderToUse = item.order !== undefined ? item.order : startingOrder++;
+      const dataObj = typeof item.data === "string" ? JSON.parse(item.data || "{}") : (item.data || {});
       const row = await prisma.row.create({
         data: {
           sheetId,
           order: orderToUse,
-          data: typeof item.data === "string" ? item.data : JSON.stringify(item.data || {}),
+          data: JSON.stringify(dataObj),
           styles: typeof item.styles === "string" ? item.styles : JSON.stringify(item.styles || {}),
+          ...extractFollowupDates(dataObj),
         },
       });
 
@@ -102,13 +131,17 @@ export async function PUT(req: Request, { params }: Params) {
       await prisma.$transaction(async (tx) => {
         await tx.row.deleteMany({ where: { sheetId } });
         if (body.rows.length > 0) {
-          const rowsToInsert = body.rows.map((r: any, idx: number) => ({
-            id: r.id && !r.id.startsWith("temp_") ? r.id : undefined,
-            sheetId,
-            order: r.order !== undefined ? r.order : idx,
-            data: typeof r.data === "string" ? r.data : JSON.stringify(r.data || {}),
-            styles: typeof r.styles === "string" ? r.styles : JSON.stringify(r.styles || {}),
-          }));
+          const rowsToInsert = body.rows.map((r: any, idx: number) => {
+            const dataObj = typeof r.data === "string" ? JSON.parse(r.data || "{}") : (r.data || {});
+            return {
+              id: r.id && !r.id.startsWith("temp_") ? r.id : undefined,
+              sheetId,
+              order: r.order !== undefined ? r.order : idx,
+              data: JSON.stringify(dataObj),
+              styles: typeof r.styles === "string" ? r.styles : JSON.stringify(r.styles || {}),
+              ...extractFollowupDates(dataObj),
+            };
+          });
           await tx.row.createMany({
             data: rowsToInsert,
           });
@@ -149,6 +182,7 @@ export async function PUT(req: Request, { params }: Params) {
             where: { id: body.rowId },
             data: {
               data: JSON.stringify(currentData),
+              ...extractFollowupDates(currentData),
             },
           });
 
@@ -167,12 +201,14 @@ export async function PUT(req: Request, { params }: Params) {
 
       // If row does not exist in DB yet (editing one of the 1,000 blank rows)
       const orderVal = body.order !== undefined ? body.order : 0;
+      const initialData = { [body.columnId]: body.value };
       const newRow = await prisma.row.create({
         data: {
           sheetId,
           order: orderVal,
-          data: JSON.stringify({ [body.columnId]: body.value }),
+          data: JSON.stringify(initialData),
           styles: JSON.stringify({}),
+          ...extractFollowupDates(initialData),
         },
       });
 
@@ -246,6 +282,7 @@ export async function PUT(req: Request, { params }: Params) {
             where: { id: existing.id },
             data: {
               data: JSON.stringify(merged),
+              ...extractFollowupDates(merged),
               ...(r.styles ? { styles: typeof r.styles === "string" ? r.styles : JSON.stringify(r.styles) } : {}),
               ...(r.order !== undefined ? { order: r.order } : {}),
             },
@@ -262,12 +299,14 @@ export async function PUT(req: Request, { params }: Params) {
         }
 
         // Create row if not yet saved in DB
+        const newData = typeof r.data === "string" ? JSON.parse(r.data) : r.data || {};
         const created = await prisma.row.create({
           data: {
             sheetId,
             order: r.order !== undefined ? r.order : 0,
-            data: typeof r.data === "string" ? r.data : JSON.stringify(r.data || {}),
+            data: JSON.stringify(newData),
             styles: typeof r.styles === "string" ? r.styles : JSON.stringify(r.styles || {}),
+            ...extractFollowupDates(newData),
           },
         });
 

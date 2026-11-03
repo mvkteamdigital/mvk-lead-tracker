@@ -1,7 +1,7 @@
 export interface ColumnDef {
   id: string;
   name: string;
-  type: "text" | "dropdown" | "number";
+  type: "text" | "dropdown" | "number" | "date";
   width: number;
   headerStyle?: "gold" | "navy" | "default" | "emerald" | "purple" | string;
   options?: string[];

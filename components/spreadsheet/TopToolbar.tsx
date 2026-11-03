@@ -47,6 +47,9 @@ interface TopToolbarProps {
   onRedo?: () => void;
   canUndo?: boolean;
   canRedo?: boolean;
+  totalLeads?: number;
+  onRefresh?: () => void;
+  isRefreshing?: boolean;
 }
 
 export function TopToolbar({
@@ -65,6 +68,9 @@ export function TopToolbar({
   onRedo,
   canUndo = false,
   canRedo = false,
+  totalLeads,
+  onRefresh,
+  isRefreshing = false,
 }: TopToolbarProps) {
   const { user, logout } = useAuth();
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -145,6 +151,11 @@ export function TopToolbar({
               <span className="text-[10px] sm:text-[11px] px-1.5 sm:px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold border border-slate-200 truncate max-w-[90px] sm:max-w-none">
                 {sheet?.name ? `Sheet: ${sheet.name}` : "Loading..."}
               </span>
+              {totalLeads !== undefined && (
+                <span className="text-[10px] sm:text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-950 font-bold border border-amber-300 whitespace-nowrap shadow-2xs">
+                  {totalLeads} {totalLeads === 1 ? "Lead" : "Leads"}
+                </span>
+              )}
               {sheet?.user && (
                 <span className="text-[10px] text-slate-500 hidden sm:inline truncate">
                   (Owner: {sheet.user.name})
@@ -152,8 +163,8 @@ export function TopToolbar({
               )}
             </div>
             
-            {/* Auto-save Status Indicator (Compact on mobile) */}
-            <div className="flex items-center gap-1 text-[10px] sm:text-[11px] text-slate-500 mt-0.5 whitespace-nowrap">
+            {/* Auto-save Status Indicator & Real-Time Sync (Compact on mobile) */}
+            <div className="flex items-center gap-2 text-[10px] sm:text-[11px] text-slate-500 mt-0.5 whitespace-nowrap">
               {savingStatus === "saving" ? (
                 <>
                   <RefreshCw className="h-2.5 w-2.5 sm:h-3 sm:w-3 text-amber-500 animate-spin shrink-0" />
@@ -165,8 +176,22 @@ export function TopToolbar({
                 <div className="flex items-center gap-1" title="All changes saved to database">
                   <CheckCircle2 className="h-2.5 w-2.5 sm:h-3 sm:w-3 text-emerald-500 shrink-0" />
                   <span className="text-slate-500 sm:hidden">Saved</span>
-                  <span className="text-slate-500 hidden sm:inline">All changes saved to database</span>
+                  <span className="text-slate-500 hidden sm:inline">All changes saved</span>
                 </div>
+              )}
+
+              {/* Instant Manual Sync with Neon PostgreSQL */}
+              {onRefresh && (
+                <button
+                  type="button"
+                  onClick={onRefresh}
+                  disabled={isRefreshing}
+                  className="flex items-center gap-1 text-[10px] font-semibold text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 px-1.5 py-0.5 rounded transition-colors"
+                  title="Force re-sync data directly from Neon database"
+                >
+                  <RefreshCw className={`h-2.5 w-2.5 text-blue-600 ${isRefreshing ? "animate-spin" : ""}`} />
+                  <span className="hidden sm:inline">Sync DB</span>
+                </button>
               )}
             </div>
           </div>

@@ -35,14 +35,18 @@ model Sheet {
 }
 
 model Row {
-  id          String   @id @default(cuid())
-  sheetId     String
-  sheet       Sheet    @relation(fields: [sheetId], references: [id], onDelete: Cascade)
-  order       Int      @default(0)
-  data        String   // JSON string of { [columnId]: value }
-  styles      String?  // JSON string of { [columnId]: { bold, italic, color, bgColor, align } }
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                 String    @id @default(cuid())
+  sheetId            String
+  sheet              Sheet     @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  order              Int       @default(0)
+  data               String    // JSON string of { [columnId]: value }
+  styles             String?   // JSON string of { [columnId]: { bold, italic, color, bgColor, align } }
+  followup1Date      DateTime?
+  followup2Date      DateTime?
+  followup3Date      DateTime?
+  followup4Date      DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   @@index([sheetId])
 }
