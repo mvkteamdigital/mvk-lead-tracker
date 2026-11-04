@@ -406,7 +406,14 @@ export function SpreadsheetApp() {
         }),
       });
 
-      if (!res.ok) throw new Error("Failed to save cell");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        if (res.status === 409) {
+          alert(`⚠️ ${errData.error || "Duplicate Lead detected."}`);
+        }
+        await fetchActiveSheetDetail(activeSheet.id);
+        throw new Error(errData.error || "Failed to save cell");
+      }
       const data = await res.json();
       if (data.row && rowId.startsWith("temp_")) {
         setActiveSheet((prev) => {
@@ -467,7 +474,11 @@ export function SpreadsheetApp() {
         body: JSON.stringify({ rows }),
       });
 
-      if (!res.ok) throw new Error("Failed to save rows");
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        await fetchActiveSheetDetail(activeSheet.id);
+        throw new Error(errData.error || "Failed to save rows");
+      }
       const data = await res.json();
       if (data.rows) {
         setActiveSheet((prev) => {
@@ -701,7 +712,10 @@ export function SpreadsheetApp() {
           body: JSON.stringify({ data, order: nextOrder }),
         });
 
-        if (!res.ok) throw new Error("Failed to add new lead");
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || "Failed to add new lead");
+        }
         const resData = await res.json();
         const createdRow = resData.rows[0];
 
@@ -714,9 +728,10 @@ export function SpreadsheetApp() {
         });
 
         setSavingStatus("saved");
-      } catch (err) {
+      } catch (err: any) {
         console.error(err);
         setSavingStatus("error");
+        throw err;
       }
     }
   };

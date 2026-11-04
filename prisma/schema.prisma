@@ -41,6 +41,8 @@ model Row {
   sheetId            String
   sheet              Sheet     @relation(fields: [sheetId], references: [id], onDelete: Cascade)
   order              Int       @default(0)
+  phoneNumber        String?   // Exact phone string for lead deduplication
+  phoneDigits        String?   // Normalized phone digits (e.g. last 10 digits)
   data               String    // JSON string of { [columnId]: value }
   styles             String?   // JSON string of { [columnId]: { bold, italic, color, bgColor, align } }
   followup1Date      DateTime?
@@ -51,4 +53,6 @@ model Row {
   updatedAt          DateTime  @updatedAt
 
   @@index([sheetId])
+  @@index([phoneNumber])
+  @@index([phoneDigits])
 }

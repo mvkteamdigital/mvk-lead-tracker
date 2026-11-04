@@ -1,9 +1,50 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { extractPhoneInfo, getRowPhoneNumber } from "@/lib/leads";
 
 interface Params {
   params: { id: string };
+}
+
+// Helper to query duplicate phone number across all user sheets
+async function findDuplicateLead(phone: string, excludeRowId?: string) {
+  const { exact, digits } = extractPhoneInfo(phone);
+  if (!exact) return null;
+
+  const orConditions: any[] = [{ phoneNumber: exact }];
+  if (digits && digits.length >= 7) {
+    orConditions.push({ phoneDigits: digits });
+  }
+
+  const existingRow = await prisma.row.findFirst({
+    where: {
+      OR: orConditions,
+      ...(excludeRowId ? { NOT: { id: excludeRowId } } : {}),
+    },
+    include: {
+      sheet: {
+        include: {
+          user: {
+            select: { id: true, name: true, email: true },
+          },
+        },
+      },
+    },
+  });
+
+  if (!existingRow) return null;
+
+  const ownerName =
+    existingRow.sheet?.user?.name ||
+    existingRow.sheet?.name ||
+    "another team member";
+
+  return {
+    row: existingRow,
+    ownerName,
+    sheetName: existingRow.sheet?.name,
+  };
 }
 
 // Helper to parse date string into valid Date or null
@@ -47,7 +88,7 @@ async function checkSheetAccess(sheetId: string, userId: string, role: string) {
   return { status: 200, sheet };
 }
 
-// POST /api/sheets/[id]/rows - Add single row or batch rows
+// POST /api/sheets/[id]/rows - Add single row or batch rows with duplicate validation
 export async function POST(req: Request, { params }: Params) {
   const user = await getSessionUser();
   if (!user) {
@@ -72,14 +113,41 @@ export async function POST(req: Request, { params }: Params) {
 
     const rowsToAdd = Array.isArray(body) ? body : body.rows ? body.rows : [body];
 
+    // Global Duplicate Lead Prevention Check:
+    // Before inserting, check if phone number already exists across any team member's leads
+    for (const item of rowsToAdd) {
+      const dataObj = typeof item.data === "string" ? JSON.parse(item.data || "{}") : (item.data || {});
+      const phone = getRowPhoneNumber(dataObj);
+      if (phone) {
+        const dup = await findDuplicateLead(phone);
+        if (dup) {
+          return NextResponse.json(
+            {
+              error: `Duplicate Lead: This phone number already exists in ${dup.ownerName}'s system.`,
+              isDuplicate: true,
+              ownerName: dup.ownerName,
+              sheetName: dup.sheetName,
+              phoneNumber: phone,
+            },
+            { status: 409 }
+          );
+        }
+      }
+    }
+
     const createdRows = [];
     for (const item of rowsToAdd) {
       const orderToUse = item.order !== undefined ? item.order : startingOrder++;
       const dataObj = typeof item.data === "string" ? JSON.parse(item.data || "{}") : (item.data || {});
+      const phone = getRowPhoneNumber(dataObj);
+      const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
+
       const row = await prisma.row.create({
         data: {
           sheetId,
           order: orderToUse,
+          phoneNumber: phoneExact || null,
+          phoneDigits: phoneDigits || null,
           data: JSON.stringify(dataObj),
           styles: typeof item.styles === "string" ? item.styles : JSON.stringify(item.styles || {}),
           ...extractFollowupDates(dataObj),
@@ -169,6 +237,25 @@ export async function PUT(req: Request, { params }: Params) {
 
     // Case 1: Single cell update: { rowId, order, columnId, value }
     if ((body.rowId || body.order !== undefined) && body.columnId !== undefined && body.value !== undefined) {
+      if (body.columnId === "col_number" && body.value && typeof body.value === "string" && body.value.trim()) {
+        const dup = await findDuplicateLead(
+          body.value,
+          body.rowId && !body.rowId.startsWith("temp_") ? body.rowId : undefined
+        );
+        if (dup) {
+          return NextResponse.json(
+            {
+              error: `Duplicate Lead: This phone number already exists in ${dup.ownerName}'s system.`,
+              isDuplicate: true,
+              ownerName: dup.ownerName,
+              sheetName: dup.sheetName,
+              phoneNumber: body.value,
+            },
+            { status: 409 }
+          );
+        }
+      }
+
       if (body.rowId && !body.rowId.startsWith("temp_")) {
         const existing = await prisma.row.findUnique({
           where: { id: body.rowId },
@@ -177,11 +264,15 @@ export async function PUT(req: Request, { params }: Params) {
         if (existing && existing.sheetId === sheetId) {
           const currentData = JSON.parse(existing.data || "{}");
           currentData[body.columnId] = body.value;
+          const phone = getRowPhoneNumber(currentData);
+          const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
 
           const updated = await prisma.row.update({
             where: { id: body.rowId },
             data: {
               data: JSON.stringify(currentData),
+              phoneNumber: phoneExact || null,
+              phoneDigits: phoneDigits || null,
               ...extractFollowupDates(currentData),
             },
           });
@@ -202,10 +293,15 @@ export async function PUT(req: Request, { params }: Params) {
       // If row does not exist in DB yet (editing one of the 1,000 blank rows)
       const orderVal = body.order !== undefined ? body.order : 0;
       const initialData = { [body.columnId]: body.value };
+      const phone = getRowPhoneNumber(initialData);
+      const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
+
       const newRow = await prisma.row.create({
         data: {
           sheetId,
           order: orderVal,
+          phoneNumber: phoneExact || null,
+          phoneDigits: phoneDigits || null,
           data: JSON.stringify(initialData),
           styles: JSON.stringify({}),
           ...extractFollowupDates(initialData),
@@ -261,6 +357,28 @@ export async function PUT(req: Request, { params }: Params) {
 
     // Case 3: Batch rows update / multi-cell paste from Excel / Google Sheets
     if (Array.isArray(body.rows)) {
+      // Validate duplicates across all leads
+      for (const r of body.rows) {
+        const newData = typeof r.data === "string" ? JSON.parse(r.data) : r.data || {};
+        const phone = getRowPhoneNumber(newData);
+        if (phone) {
+          const excludeId = r.id && !r.id.startsWith("temp_") ? r.id : undefined;
+          const dup = await findDuplicateLead(phone, excludeId);
+          if (dup) {
+            return NextResponse.json(
+              {
+                error: `Duplicate Lead: This phone number already exists in ${dup.ownerName}'s system.`,
+                isDuplicate: true,
+                ownerName: dup.ownerName,
+                sheetName: dup.sheetName,
+                phoneNumber: phone,
+              },
+              { status: 409 }
+            );
+          }
+        }
+      }
+
       const results = [];
       for (const r of body.rows) {
         let existing = null;
@@ -277,11 +395,15 @@ export async function PUT(req: Request, { params }: Params) {
           const currentData = JSON.parse(existing.data || "{}");
           const newData = typeof r.data === "string" ? JSON.parse(r.data) : r.data || {};
           const merged = { ...currentData, ...newData };
+          const phone = getRowPhoneNumber(merged);
+          const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
 
           const updated = await prisma.row.update({
             where: { id: existing.id },
             data: {
               data: JSON.stringify(merged),
+              phoneNumber: phoneExact || null,
+              phoneDigits: phoneDigits || null,
               ...extractFollowupDates(merged),
               ...(r.styles ? { styles: typeof r.styles === "string" ? r.styles : JSON.stringify(r.styles) } : {}),
               ...(r.order !== undefined ? { order: r.order } : {}),
@@ -300,10 +422,15 @@ export async function PUT(req: Request, { params }: Params) {
 
         // Create row if not yet saved in DB
         const newData = typeof r.data === "string" ? JSON.parse(r.data) : r.data || {};
+        const phone = getRowPhoneNumber(newData);
+        const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
+
         const created = await prisma.row.create({
           data: {
             sheetId,
             order: r.order !== undefined ? r.order : 0,
+            phoneNumber: phoneExact || null,
+            phoneDigits: phoneDigits || null,
             data: JSON.stringify(newData),
             styles: typeof r.styles === "string" ? r.styles : JSON.stringify(r.styles || {}),
             ...extractFollowupDates(newData),

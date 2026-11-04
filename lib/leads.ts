@@ -229,3 +229,32 @@ export function rowMatchesStatusFilter(
     );
   });
 }
+
+/**
+ * Normalizes phone number into clean trimmed string and extracted digit sequence.
+ */
+export function extractPhoneInfo(val: any): { exact: string; digits: string } {
+  if (!val || typeof val !== "string") return { exact: "", digits: "" };
+  const exact = val.trim();
+  const digits = exact.replace(/\D/g, "");
+  const last10 = digits.length >= 10 ? digits.slice(-10) : digits;
+  return { exact, digits: last10 };
+}
+
+/**
+ * Extracts phone number value from row data object regardless of key variations.
+ */
+export function getRowPhoneNumber(data: Record<string, any> | undefined | null): string {
+  if (!data || typeof data !== "object") return "";
+  const num =
+    data.col_number ??
+    data["Number"] ??
+    data["number"] ??
+    data["phone"] ??
+    data["Phone"] ??
+    data["mobile"] ??
+    data["Mobile"] ??
+    data["phone_number"] ??
+    "";
+  return typeof num === "string" ? num.trim() : String(num || "").trim();
+}

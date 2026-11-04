@@ -16,6 +16,8 @@ import {
   Calendar,
   MessageSquare,
   Sparkles,
+  AlertTriangle,
+  AlertCircle,
 } from "lucide-react";
 
 interface LeadFormModalProps {
@@ -41,6 +43,7 @@ export function LeadFormModal({
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [duplicateAlert, setDuplicateAlert] = useState<{ message: string } | null>(null);
 
   // Dynamic column lookup: by id first, then fallback to column position index
   const getCol = (colId: string, indexFallback?: number): ColumnDef | undefined => {
@@ -123,7 +126,11 @@ export function LeadFormModal({
       await onSave(formData, lead ? lead.id : undefined);
       onClose();
     } catch (err: any) {
-      setError(err.message || "Failed to save lead");
+      const msg = err.message || "Failed to save lead";
+      setError(msg);
+      if (msg.toLowerCase().includes("duplicate") || msg.toLowerCase().includes("already exists")) {
+        setDuplicateAlert({ message: msg });
+      }
     } finally {
       setSaving(false);
     }
@@ -176,8 +183,22 @@ export function LeadFormModal({
         {/* Scrollable Form Body (All Fields Dynamically Bound to Grid Headers) */}
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
           {error && (
-            <div className="p-3 text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-xl">
-              {error}
+            <div
+              className={`p-3.5 text-xs rounded-xl flex items-start gap-2.5 font-medium border animate-in fade-in ${
+                error.toLowerCase().includes("duplicate") || error.toLowerCase().includes("already exists")
+                  ? "bg-rose-50 border-rose-300 text-rose-900 ring-2 ring-rose-200"
+                  : "bg-rose-50 border-rose-200 text-rose-700"
+              }`}
+            >
+              <AlertTriangle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <div className="font-bold">
+                  {error.toLowerCase().includes("duplicate") || error.toLowerCase().includes("already exists")
+                    ? "Duplicate Lead Conflict:"
+                    : "Error:"}
+                </div>
+                <div className="mt-0.5 text-xs font-semibold">{error}</div>
+              </div>
             </div>
           )}
 
@@ -219,21 +240,40 @@ export function LeadFormModal({
               />
             </div>
 
-            {/* Number Column - Dynamically bound to grid header */}
+            {/* Number Column - Dynamically bound to grid header with duplicate validation highlight */}
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
                 {getColName("col_number", 5, "Number")} <span className="text-rose-500">*</span>
               </label>
               <div className="relative">
-                <Phone className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                <Phone
+                  className={`absolute left-3 top-2.5 h-4 w-4 ${
+                    error && (error.toLowerCase().includes("duplicate") || error.toLowerCase().includes("already exists"))
+                      ? "text-rose-500"
+                      : "text-slate-400"
+                  }`}
+                />
                 <input
                   type="tel"
                   placeholder="+91 98450 12345"
                   value={formData["col_number"] || ""}
-                  onChange={(e) => handleChange("col_number", e.target.value)}
-                  className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+                  onChange={(e) => {
+                    handleChange("col_number", e.target.value);
+                    if (error) setError(null);
+                  }}
+                  className={`w-full pl-9 pr-3 py-2 text-sm bg-white rounded-lg focus:outline-none focus:ring-2 text-slate-800 transition-all ${
+                    error && (error.toLowerCase().includes("duplicate") || error.toLowerCase().includes("already exists"))
+                      ? "border-2 border-rose-500 focus:ring-rose-400 bg-rose-50/40 text-rose-950 font-bold"
+                      : "border border-slate-300 focus:ring-amber-500"
+                  }`}
                 />
               </div>
+              {error && (error.toLowerCase().includes("duplicate") || error.toLowerCase().includes("already exists")) && (
+                <p className="text-[11px] text-rose-600 font-bold mt-1 flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3 shrink-0" />
+                  <span>Conflict: This number already exists in the system</span>
+                </p>
+              )}
             </div>
 
             {/* Lead Source - Dynamically bound to grid header */}
@@ -589,6 +629,52 @@ export function LeadFormModal({
         </div>
 
       </div>
+
+      {/* Prominent Duplicate Lead Popup Alert Modal */}
+      {duplicateAlert && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-100">
+          <div className="bg-white rounded-2xl shadow-2xl border-2 border-rose-300 max-w-md w-full p-5 flex flex-col gap-3.5 animate-in zoom-in-95 duration-100">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 border border-rose-200 shadow-2xs">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h4 className="font-extrabold text-sm sm:text-base text-rose-950 leading-tight">
+                  Duplicate Lead Conflict
+                </h4>
+                <p className="text-[11px] text-rose-700 font-semibold mt-0.5">
+                  Global Phone Number Match Detected
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDuplicateAlert(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900 font-bold leading-relaxed shadow-2xs">
+              {duplicateAlert.message}
+            </div>
+
+            <p className="text-xs text-slate-600 font-normal leading-relaxed">
+              Your entered lead information (client name, budget, plot size, remarks, etc.) has been <strong>safely preserved</strong> in this form. Please correct the phone number or verify if it was a typo.
+            </p>
+
+            <div className="pt-2 border-t border-slate-100 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setDuplicateAlert(null)}
+                className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5"
+              >
+                <span>Edit &amp; Correct Number</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
