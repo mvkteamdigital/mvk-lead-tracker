@@ -6,6 +6,7 @@ import {
   isValidLead,
   getLeadStatus,
   getLeadFollowupDate,
+  getLeadSource,
   isUnattendedLead,
   rowMatchesStatusFilter,
   rowMatchesDateFilter,
@@ -129,7 +130,7 @@ export function MobileLeadListView({
       )}
 
       {/* Cards List */}
-      <div className="p-3 sm:p-4 space-y-2.5">
+      <div className="p-2.5 sm:p-4 space-y-2">
         {leads.length === 0 ? (
           <div className="mt-8 p-8 text-center bg-white rounded-2xl border border-dashed border-slate-300 shadow-xs flex flex-col items-center">
             <div className="h-12 w-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mb-3">
@@ -182,85 +183,99 @@ export function MobileLeadListView({
             const latestDate = getLeadFollowupDate(row.data, sheet.columns);
             const statusStyle = latestStatus !== "Unassigned" ? STATUS_COLORS[latestStatus] : null;
 
-            const leadSource = row.data["col_lead_source"];
+            const leadSource = getLeadSource(row.data);
             const sourceStyle = leadSource ? SOURCE_COLORS[leadSource] : null;
 
             return (
               <div
                 key={row.id}
                 onClick={() => onEditLead(row)}
-                className="bg-white rounded-xl p-3.5 border border-slate-200 shadow-2xs hover:shadow-xs active:bg-slate-50 active:scale-[0.99] transition-all flex items-center justify-between gap-3 cursor-pointer select-none"
+                className="bg-white rounded-xl p-3 sm:p-3.5 border border-slate-200 shadow-2xs hover:shadow-xs active:bg-slate-50 active:scale-[0.99] transition-all flex items-center justify-between gap-2.5 cursor-pointer select-none"
               >
-                {/* Left: Avatar Initial & Name + Details */}
-                <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-slate-900 to-slate-800 text-amber-400 font-bold text-sm flex items-center justify-center shrink-0 shadow-inner border border-slate-700">
+                {/* Left: Compact Avatar Initial & Details */}
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                  <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-slate-900 to-slate-800 text-amber-400 font-bold text-xs flex items-center justify-center shrink-0 shadow-inner border border-slate-700">
                     {initial}
                   </div>
                   <div className="min-w-0 flex-1">
-                    {/* Name */}
-                    <h4 className="text-sm font-bold text-slate-900 truncate leading-snug">
-                      {name}
-                    </h4>
-
-                    {/* Number & Project */}
-                    <div className="flex items-center gap-2 text-xs text-slate-600 font-mono mt-0.5 flex-wrap">
-                      <div className="flex items-center gap-1">
-                        <Phone className="h-3 w-3 text-slate-400 shrink-0" />
-                        <span className="truncate">{number}</span>
-                      </div>
+                    {/* 1. Top Line: Inline Lead Name & Project Name */}
+                    <div className="flex flex-row items-center gap-1.5 min-w-0 leading-tight">
+                      <h4 className="text-sm font-bold text-slate-900 truncate max-w-[55%] shrink-0" title={name}>
+                        {name}
+                      </h4>
                       {projectName && (
-                        <div className="flex items-center gap-1 font-sans text-slate-500 font-normal">
-                          <span className="text-slate-300">•</span>
-                          <span className="truncate max-w-[120px]">{projectName}</span>
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1 font-sans text-xs text-slate-500 font-medium">
+                          <span className="text-slate-300 shrink-0">•</span>
+                          <span className="truncate" title={projectName}>
+                            {projectName}
+                          </span>
                         </div>
                       )}
                     </div>
 
-                    {/* Badges: Lead Source, Status & Follow-Up Date */}
-                    {(latestStatus !== "Unassigned" || latestDate || leadSource) && (
-                      <div className="flex items-center gap-1.5 flex-wrap mt-2">
-                        {leadSource && (
+                    {/* 2. Middle Line: Phone Number & Follow-up Status */}
+                    <div className="flex flex-row items-center gap-2 text-xs text-slate-600 mt-1 flex-wrap">
+                      <div className="flex items-center gap-1 font-mono text-[11px] text-slate-600 shrink-0">
+                        <Phone className="h-3 w-3 text-slate-400 shrink-0" />
+                        <span>{number}</span>
+                      </div>
+
+                      {/* Status / Unattended Badge */}
+                      {isUnattendedLead(row.data, sheet.columns) ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border flex items-center gap-1 bg-rose-50 text-rose-800 border-rose-300 shadow-2xs">
+                          <span className="h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse" />
+                          <span>Unattended</span>
+                        </span>
+                      ) : latestStatus !== "Unassigned" ? (
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border flex items-center gap-1 shadow-2xs ${
+                            statusStyle?.bg || "bg-slate-100"
+                          } ${statusStyle?.text || "text-slate-800"} ${
+                            statusStyle?.border || "border-slate-300"
+                          }`}
+                        >
+                          <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+                          <span className="truncate max-w-[130px]">{latestStatus}</span>
+                        </span>
+                      ) : null}
+
+                      {/* Follow-Up Date */}
+                      {latestDate && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-800 border border-blue-200 flex items-center gap-1 shadow-2xs">
+                          <Calendar className="h-2.5 w-2.5 text-blue-600" />
+                          <span>{latestDate}</span>
+                        </span>
+                      )}
+                    </div>
+
+                    {/* 3. Bottom Line: Inline Primary Lead Source & Added Date */}
+                    {(leadSource || row.createdAt) && (
+                      <div className="flex flex-row items-center justify-between gap-2 mt-1.5 pt-1.5 border-t border-slate-100 text-[10px]">
+                        {/* Primary Single Lead Source Badge */}
+                        {leadSource ? (
                           <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border flex items-center gap-1 shadow-2xs ${
+                            className={`px-2 py-0.5 rounded-full font-semibold border flex items-center gap-1 shadow-2xs truncate max-w-[55%] ${
                               sourceStyle?.bg || "bg-indigo-50"
                             } ${sourceStyle?.text || "text-indigo-800 font-semibold"} ${
                               sourceStyle?.border || "border-indigo-200"
                             }`}
+                            title={`Lead Source: ${leadSource}`}
                           >
                             <Sparkles className="h-2.5 w-2.5 text-amber-500 shrink-0" />
-                            <span className="truncate max-w-[120px]">{leadSource}</span>
+                            <span className="truncate">{leadSource}</span>
                           </span>
+                        ) : (
+                          <span />
                         )}
-                        {isUnattendedLead(row.data, sheet.columns) ? (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border flex items-center gap-1 bg-rose-50 text-rose-800 border-rose-300">
-                            <span className="h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse" />
-                            <span>Unattended</span>
-                          </span>
-                        ) : latestStatus !== "Unassigned" && (
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border flex items-center gap-1 ${
-                              statusStyle?.bg || "bg-slate-100"
-                            } ${statusStyle?.text || "text-slate-800"} ${
-                              statusStyle?.border || "border-slate-300"
-                            }`}
-                          >
-                            <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
-                            <span className="truncate max-w-[140px]">{latestStatus}</span>
-                          </span>
-                        )}
-                        {latestDate && (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-800 border border-blue-200 flex items-center gap-1">
-                            <Calendar className="h-2.5 w-2.5 text-blue-600" />
-                            <span>{latestDate}</span>
-                          </span>
-                        )}
+
+                        {/* Added Date */}
                         {row.createdAt && (
                           <span
-                            className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200 flex items-center gap-1"
+                            className="text-slate-400 font-medium flex items-center gap-1 shrink-0 ml-auto"
                             title={`Lead added on ${new Date(row.createdAt).toLocaleString("en-IN")}`}
                           >
                             <Calendar className="h-2.5 w-2.5 text-slate-400" />
-                            <span>Added: {new Date(row.createdAt).toLocaleDateString("en-IN", { month: "short", day: "numeric" })}</span>
+                            <span>Added {new Date(row.createdAt).toLocaleDateString("en-IN", { month: "short", day: "numeric" })}</span>
                           </span>
                         )}
                       </div>
@@ -269,19 +284,19 @@ export function MobileLeadListView({
                 </div>
 
                 {/* Right: Quick Call & Edit Arrow */}
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-1.5 shrink-0">
                   {number && number !== "No Phone Number" && (
                     <a
                       href={`tel:${number}`}
                       onClick={(e) => e.stopPropagation()}
-                      className="h-8 w-8 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 flex items-center justify-center border border-emerald-200 transition-colors"
+                      className="h-7 w-7 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 flex items-center justify-center border border-emerald-200 transition-colors"
                       title="Call Lead"
                     >
-                      <Phone className="h-4 w-4" />
+                      <Phone className="h-3.5 w-3.5" />
                     </a>
                   )}
-                  <div className="h-8 w-8 rounded-lg bg-slate-100 text-slate-400 flex items-center justify-center">
-                    <ChevronRight className="h-4 w-4" />
+                  <div className="h-7 w-7 rounded-lg bg-slate-100 text-slate-400 flex items-center justify-center">
+                    <ChevronRight className="h-3.5 w-3.5" />
                   </div>
                 </div>
               </div>

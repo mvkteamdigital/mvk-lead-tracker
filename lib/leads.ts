@@ -123,9 +123,19 @@ export function getLeadStatus(
 ): string {
   if (!rowData || typeof rowData !== "object") return "Unassigned";
 
-  // Find all dropdown columns or follow-up columns
+  // Find specifically follow-up status dropdown columns (strictly exclude lead source, budget, date, etc.)
   const followUpKeys = (columns || [])
-    .filter((c) => c.type === "dropdown" || c.id.includes("followup"))
+    .filter((c) => {
+      const idLower = c.id.toLowerCase();
+      const nameLower = c.name.toLowerCase();
+      if (idLower.includes("source") || nameLower.includes("source")) return false;
+      if (idLower.includes("budget") || nameLower.includes("budget")) return false;
+      if (idLower.includes("date") || nameLower.includes("date")) return false;
+      return (
+        (c.type === "dropdown" && (idLower.includes("followup") || nameLower.includes("follow up"))) ||
+        idLower.includes("followup")
+      );
+    })
     .map((c) => c.id);
 
   const keysToCheck =
