@@ -271,10 +271,25 @@ export function isUnattendedLead(
 }
 
 /**
+ * Extracts lead source value from row data object.
+ */
+export function getLeadSource(rowData: Record<string, any> | undefined | null): string {
+  if (!rowData || typeof rowData !== "object") return "";
+  const val =
+    rowData.col_lead_source ??
+    rowData["Lead Source"] ??
+    rowData["lead_source"] ??
+    rowData["source"] ??
+    "";
+  return typeof val === "string" ? val.trim() : String(val || "").trim();
+}
+
+/**
  * Checks whether a row matches an active status filter.
  * When statusFilter is null, returns true for all rows.
  * When statusFilter is "Unattended", returns true ONLY if all 4 follow-up statuses are empty.
  * When statusFilter is set, checks if any follow-up column on that lead has that status,
+ * or if statusFilter matches the lead's Lead Source,
  * or if statusFilter is "Unassigned", checks if no follow-up status has been set.
  */
 export function rowMatchesStatusFilter(
@@ -298,6 +313,12 @@ export function rowMatchesStatusFilter(
 
   // Check if primary status matches
   if (currentStatus.toLowerCase() === statusFilter.toLowerCase()) {
+    return true;
+  }
+
+  // Check if Lead Source matches (e.g., "Meta Ads", "Google Ads", etc.)
+  const leadSource = getLeadSource(rowData);
+  if (leadSource && leadSource.toLowerCase() === statusFilter.toLowerCase()) {
     return true;
   }
 

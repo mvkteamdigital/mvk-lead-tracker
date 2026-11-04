@@ -219,7 +219,15 @@ export async function PUT(req: Request, { params }: Params) {
       updateData.name = body.name.trim();
     }
     if (body.columns !== undefined) {
-      updateData.columns = typeof body.columns === "string" ? body.columns : JSON.stringify(body.columns);
+      const colsStr = typeof body.columns === "string" ? body.columns : JSON.stringify(body.columns);
+      updateData.columns = colsStr;
+
+      // When Admin saves dropdown options or filter bar preferences, sync across all team sheets
+      if (body.syncAll && user.role === "ADMIN") {
+        await prisma.sheet.updateMany({
+          data: { columns: colsStr },
+        }).catch(console.error);
+      }
     }
     if (body.order !== undefined && user.role === "ADMIN") {
       updateData.order = body.order;

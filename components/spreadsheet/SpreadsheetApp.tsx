@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { SheetMeta, SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
 import { isValidLead, getLeadStatus, isUnattendedLead, rowMatchesStatusFilter, rowMatchesDateFilter } from "@/lib/leads";
-import { DEFAULT_FOLLOWUP_OPTIONS } from "@/lib/defaults";
+import { DEFAULT_FOLLOWUP_OPTIONS, DEFAULT_LEAD_SOURCES, DEFAULT_STATUS_FILTER_VISIBILITY, DEFAULT_SOURCE_FILTER_VISIBILITY } from "@/lib/defaults";
 import { TopToolbar } from "./TopToolbar";
 import { StatusFilterBar } from "./StatusFilterBar";
 import { FormulaBar } from "./FormulaBar";
@@ -90,7 +90,7 @@ export function SpreadsheetApp() {
     const optionsSet = new Set<string>();
     if (activeSheet?.columns) {
       activeSheet.columns.forEach((col) => {
-        if (col.type === "dropdown" && Array.isArray(col.options)) {
+        if (col.type === "dropdown" && col.id.includes("followup") && Array.isArray(col.options)) {
           col.options.forEach((opt) => {
             if (opt && opt.trim()) optionsSet.add(opt.trim());
           });
@@ -103,7 +103,33 @@ export function SpreadsheetApp() {
     return Array.from(optionsSet);
   }, [activeSheet?.columns]);
 
-  // Real-time summary metric counters for each status option + Unassigned.
+  // Dynamically extract all available lead source options from the active sheet
+  const availableSourceOptions = useMemo(() => {
+    const sourceCol = activeSheet?.columns.find(
+      (c) => c.id === "col_lead_source" || c.name.toLowerCase().includes("source")
+    );
+    if (sourceCol && Array.isArray(sourceCol.options) && sourceCol.options.length > 0) {
+      return sourceCol.options;
+    }
+    return DEFAULT_LEAD_SOURCES;
+  }, [activeSheet?.columns]);
+
+  // Extract filter visibility maps for status and sources from the active sheet
+  const statusFilterVisibility = useMemo(() => {
+    const statusCol = activeSheet?.columns.find(
+      (c) => c.type === "dropdown" && c.id.includes("followup")
+    );
+    return statusCol?.filterVisibility || DEFAULT_STATUS_FILTER_VISIBILITY;
+  }, [activeSheet?.columns]);
+
+  const sourceFilterVisibility = useMemo(() => {
+    const sourceCol = activeSheet?.columns.find(
+      (c) => c.id === "col_lead_source" || c.name.toLowerCase().includes("source")
+    );
+    return sourceCol?.filterVisibility || DEFAULT_SOURCE_FILTER_VISIBILITY;
+  }, [activeSheet?.columns]);
+
+  // Real-time summary metric counters for each status option + Lead Sources + Unattended + Unassigned.
   // When dateFilter is active, status counters automatically update to count ONLY leads added on that date!
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -114,8 +140,15 @@ export function SpreadsheetApp() {
       isUnattendedLead(r.data, activeSheet.columns)
     ).length;
 
-    // Use activeSheetDateFilteredRows so status metrics automatically respect date-wise filtering!
+    // Status option counts (respecting active date filter)
     availableStatusOptions.forEach((opt) => {
+      counts[opt] = activeSheetDateFilteredRows.filter((r) =>
+        rowMatchesStatusFilter(r.data, opt, activeSheet.columns)
+      ).length;
+    });
+
+    // Lead Source option counts (respecting active date filter)
+    availableSourceOptions.forEach((opt) => {
       counts[opt] = activeSheetDateFilteredRows.filter((r) =>
         rowMatchesStatusFilter(r.data, opt, activeSheet.columns)
       ).length;
@@ -126,7 +159,7 @@ export function SpreadsheetApp() {
     ).length;
 
     return counts;
-  }, [activeSheet, availableStatusOptions, activeSheetDateFilteredRows]);
+  }, [activeSheet, availableStatusOptions, availableSourceOptions, activeSheetDateFilteredRows]);
 
   // Derived state: sheet list with reactive real-time valid lead count for the active tab
   const displayedSheets = useMemo(() => {
@@ -626,7 +659,7 @@ export function SpreadsheetApp() {
     }
   };
 
-  // 8. Update Columns (widths, rename, reorder, delete)
+  // 8. Update Columns (widths, rename, reorder, delete, filter visibility)
   const handleUpdateColumns = async (columns: ColumnDef[]) => {
     if (!activeSheet) return;
 
@@ -636,7 +669,7 @@ export function SpreadsheetApp() {
       await fetch(`/api/sheets/${activeSheet.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ columns }),
+        body: JSON.stringify({ columns, syncAll: user?.role === "ADMIN" }),
       });
     } catch (err) {
       console.error(err);
@@ -650,12 +683,51 @@ export function SpreadsheetApp() {
     await handleUpdateColumns(updatedCols);
   };
 
-  // 10. Save Dropdown Options for a column
-  const handleSaveDropdownOptions = async (columnId: string, options: string[]) => {
+  // 10. Save Dropdown Options & Filter Visibility for column(s)
+  const handleSaveDropdownOptions = async (
+    columnId: string,
+    options: string[],
+    filterVisibility?: Record<string, boolean>,
+    allColumnsToUpdate?: { columnId: string; options: string[]; filterVisibility: Record<string, boolean> }[]
+  ) => {
     if (!activeSheet) return;
-    const updatedCols = activeSheet.columns.map((c) =>
-      c.id === columnId ? { ...c, options } : c
-    );
+
+    let updatedCols = [...activeSheet.columns];
+
+    if (allColumnsToUpdate && allColumnsToUpdate.length > 0) {
+      allColumnsToUpdate.forEach(({ columnId: colId, options: colOpts, filterVisibility: colVis }) => {
+        const isFollowup = colId.includes("followup");
+        updatedCols = updatedCols.map((c) => {
+          if (isFollowup && c.type === "dropdown" && c.id.includes("followup")) {
+            return { ...c, options: colOpts, filterVisibility: colVis };
+          }
+          if (c.id === colId) {
+            return { ...c, options: colOpts, filterVisibility: colVis };
+          }
+          return c;
+        });
+      });
+    } else {
+      const isFollowupCol = columnId.includes("followup");
+      updatedCols = updatedCols.map((c) => {
+        if (isFollowupCol && c.type === "dropdown" && c.id.includes("followup")) {
+          return {
+            ...c,
+            options,
+            filterVisibility: filterVisibility !== undefined ? filterVisibility : c.filterVisibility,
+          };
+        }
+        if (c.id === columnId) {
+          return {
+            ...c,
+            options,
+            filterVisibility: filterVisibility !== undefined ? filterVisibility : c.filterVisibility,
+          };
+        }
+        return c;
+      });
+    }
+
     await handleUpdateColumns(updatedCols);
   };
 
@@ -839,6 +911,9 @@ export function SpreadsheetApp() {
         totalLeads={displayedLeadCount}
         allTimeTotalLeads={activeSheetValidLeadCount}
         availableStatuses={availableStatusOptions}
+        statusFilterVisibility={statusFilterVisibility}
+        availableSources={availableSourceOptions}
+        sourceFilterVisibility={sourceFilterVisibility}
         statusCounts={statusCounts}
         activeFilter={statusFilter}
         onSelectFilter={setStatusFilter}
@@ -968,6 +1043,8 @@ export function SpreadsheetApp() {
           setSelectedColumnForDropdown(null);
         }}
         column={selectedColumnForDropdown}
+        columns={activeSheet?.columns || []}
+        isAdmin={user?.role === "ADMIN"}
         onSaveOptions={handleSaveDropdownOptions}
       />
 

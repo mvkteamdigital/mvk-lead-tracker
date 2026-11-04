@@ -5,6 +5,7 @@ export interface ColumnDef {
   width: number;
   headerStyle?: "gold" | "navy" | "default" | "emerald" | "purple" | string;
   options?: string[];
+  filterVisibility?: Record<string, boolean>; // optionName -> boolean (true: show in top bar, false: in More Filters)
 }
 
 export interface CellStyle {

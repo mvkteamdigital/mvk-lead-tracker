@@ -21,6 +21,28 @@ export const DEFAULT_LEAD_SOURCES = [
   "Cold Call"
 ];
 
+// Default visibility in top dashboard filter bar (options with true show as quick chips; false show in More Filters)
+export const DEFAULT_STATUS_FILTER_VISIBILITY: Record<string, boolean> = {
+  "Follow-up Needed": true,
+  "RNR": true,
+  "Site Visit Completed": true,
+  "Dropped / Not Interested": false,
+  "Site Visit Booked – Not Completed": false,
+  "C P": false,
+  "Purchase Done": false,
+};
+
+export const DEFAULT_SOURCE_FILTER_VISIBILITY: Record<string, boolean> = {
+  "Meta Ads": true,
+  "Google Ads": false,
+  "Direct": false,
+  "Referral": false,
+  "Walk-in": false,
+  "Website": false,
+  "MagicBricks / 99acres": false,
+  "Cold Call": false,
+};
+
 export const DEFAULT_COLUMNS: ColumnDef[] = [
   {
     id: "col_project_name",
