@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { DEFAULT_COLUMNS } from "@/lib/defaults";
 import bcrypt from "bcryptjs";
 
-// GET /api/users - Admin only: List all users & sheets
+// GET /api/users - Admin only: List all users & sheets with credential management
 export async function GET(req: Request) {
   const user = await getSessionUser(req);
   if (!user) {
@@ -33,6 +34,7 @@ export async function GET(req: Request) {
         email: true,
         role: true,
         status: true,
+        displayPassword: true,
         mustChangePassword: true,
         createdAt: true,
         updatedAt: true,
@@ -55,7 +57,136 @@ export async function GET(req: Request) {
   }
 }
 
-// PUT /api/users - Admin only: Update member email or reset member password
+// POST /api/users - Admin only: Create a new team member account
+export async function POST(req: Request) {
+  const user = await getSessionUser(req);
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (user.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden: Admin access required." }, { status: 403 });
+  }
+
+  const dbUser = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { role: true },
+  });
+
+  if (!dbUser || dbUser.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden: Admin access required." }, { status: 403 });
+  }
+
+  try {
+    const { name, email, password, role = "MEMBER", sheetOption = "new" } = await req.json();
+
+    if (!name || !name.trim()) {
+      return NextResponse.json({ error: "Member name is required." }, { status: 400 });
+    }
+
+    if (!email || !email.trim()) {
+      return NextResponse.json({ error: "Email address is required." }, { status: 400 });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Check email uniqueness
+    const existing = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+
+    if (existing) {
+      return NextResponse.json(
+        { error: `User with email "${normalizedEmail}" already exists.` },
+        { status: 400 }
+      );
+    }
+
+    if (!password || password.trim().length < 6) {
+      return NextResponse.json(
+        { error: "Password must be at least 6 characters long." },
+        { status: 400 }
+      );
+    }
+
+    const hashedPassword = await bcrypt.hash(password.trim(), 10);
+
+    const newUser = await prisma.user.create({
+      data: {
+        name: name.trim(),
+        email: normalizedEmail,
+        password: hashedPassword,
+        displayPassword: password.trim(),
+        role: role === "ADMIN" ? "ADMIN" : "MEMBER",
+        status: "ACTIVE",
+        mustChangePassword: false,
+      },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        status: true,
+        displayPassword: true,
+        mustChangePassword: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    // Handle sheet tab assignment
+    let assignedSheet = null;
+    if (sheetOption === "new") {
+      const sheetCount = await prisma.sheet.count();
+      const newSheet = await prisma.sheet.create({
+        data: {
+          name: name.trim(),
+          userId: newUser.id,
+          order: sheetCount,
+          columns: JSON.stringify(DEFAULT_COLUMNS),
+        },
+        select: {
+          id: true,
+          name: true,
+          _count: {
+            select: { rows: true },
+          },
+        },
+      });
+      assignedSheet = newSheet;
+    } else if (sheetOption && sheetOption !== "none") {
+      const existingSheet = await prisma.sheet.update({
+        where: { id: sheetOption },
+        data: { userId: newUser.id },
+        select: {
+          id: true,
+          name: true,
+          _count: {
+            select: { rows: true },
+          },
+        },
+      });
+      assignedSheet = existingSheet;
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: `Team member account "${newUser.name}" created successfully.`,
+      user: {
+        ...newUser,
+        sheets: assignedSheet ? [assignedSheet] : [],
+      },
+    });
+  } catch (error: any) {
+    console.error("Create member error:", error);
+    return NextResponse.json(
+      { error: error.message || "Failed to create team member." },
+      { status: 500 }
+    );
+  }
+}
+
+// PUT /api/users - Admin only: Update member email, name, role, status, sheet, or password
 export async function PUT(req: Request) {
   const user = await getSessionUser(req);
   if (!user) {
@@ -78,7 +209,7 @@ export async function PUT(req: Request) {
   }
 
   try {
-    const { userId, email, newPassword, name, status } = await req.json();
+    const { userId, email, newPassword, name, role, status, sheetId } = await req.json();
 
     if (!userId) {
       return NextResponse.json({ error: "userId is required" }, { status: 400 });
@@ -102,6 +233,12 @@ export async function PUT(req: Request) {
         return NextResponse.json({ error: "Cannot revoke Administrator access." }, { status: 400 });
       }
       updateData.status = status;
+    }
+
+    if (role !== undefined) {
+      if (role === "ADMIN" || role === "MEMBER") {
+        updateData.role = role;
+      }
     }
 
     if (email !== undefined && email.trim()) {
@@ -132,7 +269,26 @@ export async function PUT(req: Request) {
         );
       }
       updateData.password = await bcrypt.hash(newPassword.trim(), 10);
+      updateData.displayPassword = newPassword.trim();
       updateData.mustChangePassword = false;
+    }
+
+    if (sheetId !== undefined) {
+      if (!sheetId || sheetId === "none") {
+        await prisma.sheet.updateMany({
+          where: { userId },
+          data: { userId: null },
+        });
+      } else {
+        await prisma.sheet.updateMany({
+          where: { userId },
+          data: { userId: null },
+        });
+        await prisma.sheet.update({
+          where: { id: sheetId },
+          data: { userId },
+        });
+      }
     }
 
     const updated = await prisma.user.update({
@@ -144,8 +300,18 @@ export async function PUT(req: Request) {
         email: true,
         role: true,
         status: true,
+        displayPassword: true,
         mustChangePassword: true,
         updatedAt: true,
+        sheets: {
+          select: {
+            id: true,
+            name: true,
+            _count: {
+              select: { rows: true },
+            },
+          },
+        },
       },
     });
 

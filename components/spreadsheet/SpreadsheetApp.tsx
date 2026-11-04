@@ -969,6 +969,7 @@ export function SpreadsheetApp() {
         <ManageTeamAccountsModal
           isOpen={isManageAccountsModalOpen}
           onClose={() => setIsManageAccountsModalOpen(false)}
+          onRefreshSheets={fetchSheets}
         />
       )}
 

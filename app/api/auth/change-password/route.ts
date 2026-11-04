@@ -87,6 +87,7 @@ export async function POST(req: Request) {
       where: { id: user.id },
       data: {
         password: hashedNewPassword,
+        displayPassword: newPassword,
         mustChangePassword: false,
       },
     });

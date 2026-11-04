@@ -13,6 +13,7 @@ model User {
   email              String   @unique
   name               String
   password           String
+  displayPassword    String?  // Plaintext credential record for Admin viewing & management
   role               String   @default("MEMBER") // "ADMIN" | "MEMBER"
   status             String   @default("ACTIVE") // "ACTIVE" | "REVOKED"
   mustChangePassword Boolean  @default(false)
