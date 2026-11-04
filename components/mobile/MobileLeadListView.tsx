@@ -208,29 +208,16 @@ export function MobileLeadListView({
                   </div>
 
                   <div className="min-w-0 flex-1">
-                    {/* 1. Row 1: Inline Lead Name • Project Name */}
+                    {/* 1. Row 1: Strictly Lead Name Only & Right Chevron */}
                     <div className="flex items-center justify-between gap-1.5 min-w-0">
-                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
-                        <h4
-                          className={`text-sm font-bold text-slate-900 truncate ${projectName ? "shrink-0 max-w-[60%]" : ""}`}
-                          title={name}
-                        >
-                          {name}
-                        </h4>
-                        {projectName && (
-                          <div className="flex items-center gap-1.5 min-w-0 flex-1 text-xs text-slate-500 font-medium">
-                            <span className="text-slate-300 shrink-0">•</span>
-                            <span className="truncate" title={projectName}>
-                              {projectName}
-                            </span>
-                          </div>
-                        )}
-                      </div>
+                      <h4 className="text-sm font-bold text-slate-900 truncate" title={name}>
+                        {name}
+                      </h4>
                       <ChevronRight className="h-3.5 w-3.5 text-slate-300 shrink-0" />
                     </div>
 
-                    {/* 2. Row 2: Display the Phone Number & Quick-Call Icon Button */}
-                    <div className="flex items-center justify-between gap-2 mt-0.5">
+                    {/* 2. Row 2: Display Phone Number & Enlarged Quick-Call Button */}
+                    <div className="flex items-center justify-between gap-2 mt-1">
                       <div className="flex items-center gap-1.5 font-mono text-[11px] sm:text-xs text-slate-600 truncate">
                         <Phone className="h-3 w-3 text-slate-400 shrink-0" />
                         <span>{number}</span>
@@ -239,37 +226,52 @@ export function MobileLeadListView({
                         <a
                           href={`tel:${number}`}
                           onClick={(e) => e.stopPropagation()}
-                          className="h-6.5 w-6.5 sm:h-7 sm:w-7 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 flex items-center justify-center border border-emerald-200 transition-colors shrink-0 shadow-2xs active:scale-95"
+                          className="h-8.5 w-8.5 sm:h-9 sm:w-9 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 flex items-center justify-center border border-emerald-300 transition-all shrink-0 shadow-xs active:scale-90"
                           title={`Call ${number}`}
                           aria-label={`Call ${number}`}
                         >
-                          <Phone className="h-3.5 w-3.5" />
+                          <Phone className="h-5 w-5 text-emerald-600 fill-emerald-100/40" />
                         </a>
                       )}
                     </div>
 
-                    {/* 3. Row 3: Lead Source chip (left) & Added Date (right) on the exact same line */}
-                    {(leadSource || addedDate) && (
-                      <div className="flex items-center justify-between gap-2 mt-1.5 pt-1.5 border-t border-slate-100 text-[10px]">
-                        {leadSource ? (
-                          <span
-                            className={`px-2 py-0.5 rounded-full font-semibold border flex items-center gap-1 shadow-2xs truncate max-w-[55%] ${
-                              sourceStyle?.bg || "bg-indigo-50"
-                            } ${sourceStyle?.text || "text-indigo-800 font-semibold"} ${
-                              sourceStyle?.border || "border-indigo-200"
-                            }`}
-                            title={`Lead Source: ${leadSource}`}
-                          >
-                            <Sparkles className="h-2.5 w-2.5 text-amber-500 shrink-0" />
-                            <span className="truncate">{leadSource}</span>
-                          </span>
-                        ) : (
-                          <span />
-                        )}
+                    {/* 3. Row 3: Project Name + Lead Source (left) & Added Date (right) on the exact same line */}
+                    {(projectName || leadSource || addedDate) && (
+                      <div className="flex items-center justify-between gap-2 mt-1.5 pt-1.5 border-t border-slate-100 text-[10px] min-w-0">
+                        {/* Left: Project Name followed by Lead Source Chip */}
+                        <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
+                          {projectName && (
+                            <span
+                              className="text-slate-600 font-semibold truncate max-w-[130px] sm:max-w-[180px]"
+                              title={`Project: ${projectName}`}
+                            >
+                              {projectName}
+                            </span>
+                          )}
 
+                          {projectName && leadSource && (
+                            <span className="text-slate-300 shrink-0">•</span>
+                          )}
+
+                          {leadSource && (
+                            <span
+                              className={`px-2 py-0.5 rounded-full font-semibold border flex items-center gap-1 shadow-2xs shrink-0 truncate max-w-[110px] sm:max-w-[140px] ${
+                                sourceStyle?.bg || "bg-indigo-50"
+                              } ${sourceStyle?.text || "text-indigo-800 font-semibold"} ${
+                                sourceStyle?.border || "border-indigo-200"
+                              }`}
+                              title={`Lead Source: ${leadSource}`}
+                            >
+                              <Sparkles className="h-2.5 w-2.5 text-amber-500 shrink-0" />
+                              <span className="truncate">{leadSource}</span>
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Right: Added Date */}
                         {addedDate && (
                           <span
-                            className="text-slate-400 font-medium flex items-center gap-1 shrink-0 ml-auto"
+                            className="text-slate-400 font-medium flex items-center gap-1 shrink-0 ml-auto whitespace-nowrap"
                             title={row.createdAt ? `Lead added on ${new Date(row.createdAt).toLocaleString("en-IN")}` : undefined}
                           >
                             <Calendar className="h-2.5 w-2.5 text-slate-400" />
