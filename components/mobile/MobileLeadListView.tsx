@@ -6,6 +6,7 @@ import {
   isValidLead,
   getLeadStatus,
   getLeadFollowupDate,
+  isUnattendedLead,
   rowMatchesStatusFilter,
   rowMatchesDateFilter,
   formatDateDisplay,
@@ -135,12 +136,24 @@ export function MobileLeadListView({
               <Users className="h-6 w-6" />
             </div>
             <h4 className="text-sm font-bold text-slate-800">
-              {searchQuery ? "No matching leads found" : "No leads in this sheet yet"}
+              {searchQuery
+                ? "No matching leads found"
+                : statusFilter === "Unattended"
+                ? "All leads have been attended! 🎉"
+                : statusFilter
+                ? `No leads with status "${statusFilter}"`
+                : dateFilter
+                ? `No leads added on ${formatDateDisplay(dateFilter)}`
+                : "No leads in this sheet yet"}
             </h4>
             <p className="text-xs text-slate-500 mt-1 max-w-xs">
               {searchQuery
                 ? "Try searching for a different name or number."
-                : "Tap the \"➕ Add Lead\" button below to record your first client in this sheet."}
+                : statusFilter === "Unattended"
+                ? "Every lead in this sheet has at least one follow-up recorded."
+                : statusFilter
+                ? "Try selecting a different status option."
+                : 'Tap the "➕ Add Lead" button below to record your first client in this sheet.'}
             </p>
             {!searchQuery && (
               <button
@@ -218,7 +231,12 @@ export function MobileLeadListView({
                             <span className="truncate max-w-[120px]">{leadSource}</span>
                           </span>
                         )}
-                        {latestStatus !== "Unassigned" && (
+                        {isUnattendedLead(row.data, sheet.columns) ? (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border flex items-center gap-1 bg-rose-50 text-rose-800 border-rose-300">
+                            <span className="h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse" />
+                            <span>Unattended</span>
+                          </span>
+                        ) : latestStatus !== "Unassigned" && (
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border flex items-center gap-1 ${
                               statusStyle?.bg || "bg-slate-100"

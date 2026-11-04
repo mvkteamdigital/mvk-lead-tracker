@@ -1612,9 +1612,13 @@ export function SpreadsheetGrid({
                     <div className="h-12 w-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center">
                       <Calendar className="h-6 w-6" />
                     </div>
-                    <h4 className="text-sm font-bold text-slate-800">No leads match the active filters</h4>
+                    <h4 className="text-sm font-bold text-slate-800">
+                      {statusFilter === "Unattended" ? "All leads have been attended! 🎉" : "No leads match the active filters"}
+                    </h4>
                     <p className="text-xs text-slate-500">
-                      {dateFilter
+                      {statusFilter === "Unattended"
+                        ? "Every lead in this sheet has at least one follow-up recorded."
+                        : dateFilter
                         ? `No leads were added on ${formatDateDisplay(dateFilter)}.`
                         : "Try selecting a different date or status option."}
                     </p>

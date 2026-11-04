@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { SheetMeta, SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
-import { isValidLead, getLeadStatus, rowMatchesStatusFilter, rowMatchesDateFilter } from "@/lib/leads";
+import { isValidLead, getLeadStatus, isUnattendedLead, rowMatchesStatusFilter, rowMatchesDateFilter } from "@/lib/leads";
 import { DEFAULT_FOLLOWUP_OPTIONS } from "@/lib/defaults";
 import { TopToolbar } from "./TopToolbar";
 import { StatusFilterBar } from "./StatusFilterBar";
@@ -108,6 +108,11 @@ export function SpreadsheetApp() {
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     if (!activeSheet || !activeSheet.rows) return counts;
+
+    // Strict live count of Unattended Leads (all 4 follow-up statuses simultaneously empty)
+    counts["Unattended"] = activeSheetDateFilteredRows.filter((r) =>
+      isUnattendedLead(r.data, activeSheet.columns)
+    ).length;
 
     // Use activeSheetDateFilteredRows so status metrics automatically respect date-wise filtering!
     availableStatusOptions.forEach((opt) => {

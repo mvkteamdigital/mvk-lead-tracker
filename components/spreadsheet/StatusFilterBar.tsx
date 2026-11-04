@@ -54,6 +54,7 @@ export function StatusFilterBar({
   };
 
   const unassignedCount = statusCounts["Unassigned"] || 0;
+  const unattendedCount = statusCounts["Unattended"] || 0;
 
   return (
     <div className="bg-white border-b border-slate-200 px-3 sm:px-4 py-2 flex items-center gap-2 select-none shadow-2xs shrink-0 z-20 overflow-x-auto no-scrollbar">
@@ -205,10 +206,39 @@ export function StatusFilterBar({
           </span>
         </button>
 
+        {/* 3. Static "Unattended" Leads Filter Chip (Subtle red/orange warning color with live count) */}
+        <button
+          type="button"
+          onClick={() => onSelectFilter(activeFilter === "Unattended" ? null : "Unattended")}
+          className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 shrink-0 border cursor-pointer ${
+            activeFilter === "Unattended"
+              ? "ring-2 ring-rose-500 bg-rose-100 text-rose-950 border-rose-400 font-bold shadow-xs"
+              : "bg-rose-50/90 hover:bg-rose-100 text-rose-800 border-rose-300 hover:border-rose-400"
+          }`}
+          title={`Filter by Unattended Leads (All 4 follow-ups empty: ${unattendedCount} leads${dateFilter ? ` on ${formatDateDisplay(dateFilter)}` : ""})`}
+        >
+          <span className={`h-2 w-2 rounded-full shrink-0 ${unattendedCount > 0 ? "bg-rose-500 animate-pulse" : "bg-rose-300"}`} />
+          <span className="whitespace-nowrap font-bold">Unattended:</span>
+          <span
+            className={`text-[10px] px-1.5 py-0.2 rounded-full font-extrabold ${
+              activeFilter === "Unattended"
+                ? "bg-rose-700 text-white"
+                : "bg-white text-rose-900 border border-rose-200 shadow-2xs"
+            }`}
+          >
+            {unattendedCount}
+          </span>
+          {activeFilter === "Unattended" && (
+            <X className="h-3 w-3 ml-0.5 opacity-70 hover:opacity-100" />
+          )}
+        </button>
+
         <div className="h-4 w-px bg-slate-200 shrink-0 mx-1" />
 
-        {/* 3. Dynamic Status Badges with Live Summary Counts (synchronized to date filter) */}
-        {availableStatuses.map((status, idx) => {
+        {/* 4. Dynamic Status Badges with Live Summary Counts (synchronized to date filter) */}
+        {availableStatuses
+          .filter((s) => s.toLowerCase() !== "unattended")
+          .map((status, idx) => {
           const count = statusCounts[status] || 0;
           const isSelected = activeFilter === status;
           const color = getStatusColor(status, idx);
