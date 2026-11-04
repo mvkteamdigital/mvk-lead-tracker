@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { extractPhoneInfo, getRowPhoneNumber } from "@/lib/leads";
+import { extractPhoneInfo, getRowPhoneNumber, isNameFieldKey, getLeadName } from "@/lib/leads";
 
 interface Params {
   params: { id: string };
@@ -150,6 +150,7 @@ export async function POST(req: Request, { params }: Params) {
           phoneDigits: phoneDigits || null,
           data: JSON.stringify(dataObj),
           styles: typeof item.styles === "string" ? item.styles : JSON.stringify(item.styles || {}),
+          nameModifiedAt: new Date(),
           ...extractFollowupDates(dataObj),
         },
       });
@@ -160,6 +161,7 @@ export async function POST(req: Request, { params }: Params) {
         order: row.order,
         data: JSON.parse(row.data),
         styles: JSON.parse(row.styles || "{}"),
+        nameModifiedAt: (row.nameModifiedAt || row.createdAt).toISOString(),
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
       });
@@ -218,7 +220,7 @@ export async function PUT(req: Request, { params }: Params) {
 
       const updatedRows = await prisma.row.findMany({
         where: { sheetId },
-        orderBy: { createdAt: "desc" },
+        orderBy: { nameModifiedAt: "desc" },
       });
 
       return NextResponse.json({
@@ -229,6 +231,7 @@ export async function PUT(req: Request, { params }: Params) {
           order: r.order,
           data: JSON.parse(r.data || "{}"),
           styles: JSON.parse(r.styles || "{}"),
+          nameModifiedAt: (r.nameModifiedAt || r.createdAt).toISOString(),
           createdAt: r.createdAt.toISOString(),
           updatedAt: r.updatedAt.toISOString(),
         })),
@@ -263,7 +266,11 @@ export async function PUT(req: Request, { params }: Params) {
 
         if (existing && existing.sheetId === sheetId) {
           const currentData = JSON.parse(existing.data || "{}");
+          const oldName = getLeadName(currentData);
           currentData[body.columnId] = body.value;
+          const newName = getLeadName(currentData);
+          const isNameChanged = isNameFieldKey(body.columnId) && oldName !== newName;
+
           const phone = getRowPhoneNumber(currentData);
           const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
 
@@ -273,6 +280,7 @@ export async function PUT(req: Request, { params }: Params) {
               data: JSON.stringify(currentData),
               phoneNumber: phoneExact || null,
               phoneDigits: phoneDigits || null,
+              ...(isNameChanged ? { nameModifiedAt: new Date() } : {}),
               ...extractFollowupDates(currentData),
             },
           });
@@ -285,6 +293,9 @@ export async function PUT(req: Request, { params }: Params) {
               order: updated.order,
               data: currentData,
               styles: JSON.parse(updated.styles || "{}"),
+              nameModifiedAt: (updated.nameModifiedAt || updated.createdAt).toISOString(),
+              createdAt: updated.createdAt.toISOString(),
+              updatedAt: updated.updatedAt.toISOString(),
             },
           });
         }
@@ -304,6 +315,7 @@ export async function PUT(req: Request, { params }: Params) {
           phoneDigits: phoneDigits || null,
           data: JSON.stringify(initialData),
           styles: JSON.stringify({}),
+          nameModifiedAt: new Date(),
           ...extractFollowupDates(initialData),
         },
       });
@@ -316,6 +328,9 @@ export async function PUT(req: Request, { params }: Params) {
           order: newRow.order,
           data: JSON.parse(newRow.data),
           styles: JSON.parse(newRow.styles || "{}"),
+          nameModifiedAt: (newRow.nameModifiedAt || newRow.createdAt).toISOString(),
+          createdAt: newRow.createdAt.toISOString(),
+          updatedAt: newRow.updatedAt.toISOString(),
         },
       });
     }
@@ -394,7 +409,13 @@ export async function PUT(req: Request, { params }: Params) {
         if (existing && existing.sheetId === sheetId) {
           const currentData = JSON.parse(existing.data || "{}");
           const newData = typeof r.data === "string" ? JSON.parse(r.data) : r.data || {};
+          const oldName = getLeadName(currentData);
           const merged = { ...currentData, ...newData };
+          const newName = getLeadName(merged);
+          const isNameChanged = oldName !== newName && (
+            Object.keys(newData).some((k) => isNameFieldKey(k))
+          );
+
           const phone = getRowPhoneNumber(merged);
           const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
 
@@ -404,6 +425,7 @@ export async function PUT(req: Request, { params }: Params) {
               data: JSON.stringify(merged),
               phoneNumber: phoneExact || null,
               phoneDigits: phoneDigits || null,
+              ...(isNameChanged ? { nameModifiedAt: new Date() } : {}),
               ...extractFollowupDates(merged),
               ...(r.styles ? { styles: typeof r.styles === "string" ? r.styles : JSON.stringify(r.styles) } : {}),
               ...(r.order !== undefined ? { order: r.order } : {}),
@@ -416,6 +438,9 @@ export async function PUT(req: Request, { params }: Params) {
             order: updated.order,
             data: merged,
             styles: JSON.parse(updated.styles || "{}"),
+            nameModifiedAt: (updated.nameModifiedAt || updated.createdAt).toISOString(),
+            createdAt: updated.createdAt.toISOString(),
+            updatedAt: updated.updatedAt.toISOString(),
           });
           continue;
         }
@@ -433,6 +458,7 @@ export async function PUT(req: Request, { params }: Params) {
             phoneDigits: phoneDigits || null,
             data: JSON.stringify(newData),
             styles: typeof r.styles === "string" ? r.styles : JSON.stringify(r.styles || {}),
+            nameModifiedAt: new Date(),
             ...extractFollowupDates(newData),
           },
         });
@@ -443,6 +469,9 @@ export async function PUT(req: Request, { params }: Params) {
           order: created.order,
           data: JSON.parse(created.data),
           styles: JSON.parse(created.styles || "{}"),
+          nameModifiedAt: (created.nameModifiedAt || created.createdAt).toISOString(),
+          createdAt: created.createdAt.toISOString(),
+          updatedAt: created.updatedAt.toISOString(),
         });
       }
 

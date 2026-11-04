@@ -22,6 +22,7 @@ export interface RowData {
   order: number;
   data: Record<string, any>;
   styles?: Record<string, CellStyle>;
+  nameModifiedAt?: string;
   createdAt?: string;
   updatedAt?: string;
 }

@@ -473,11 +473,19 @@ export function SpreadsheetGrid({
   const [draggedColIdx, setDraggedColIdx] = useState<number | null>(null);
   const [dragOverColIdx, setDragOverColIdx] = useState<number | null>(null);
 
-  // Sort rows by creation date descending (newest leads always at the top of the spreadsheet grid)
+  // Sort rows by nameModifiedAt descending (strictly bumped to top on initial creation or when Name field is modified)
   const sortedRows = useMemo(() => {
     return [...sheet.rows].sort((a, b) => {
-      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      const timeA = a.nameModifiedAt
+        ? new Date(a.nameModifiedAt).getTime()
+        : a.createdAt
+        ? new Date(a.createdAt).getTime()
+        : 0;
+      const timeB = b.nameModifiedAt
+        ? new Date(b.nameModifiedAt).getTime()
+        : b.createdAt
+        ? new Date(b.createdAt).getTime()
+        : 0;
       return timeB - timeA;
     });
   }, [sheet.rows]);

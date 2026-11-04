@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { SheetMeta, SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
-import { isValidLead, getLeadStatus, isUnattendedLead, rowMatchesStatusFilter, rowMatchesDateFilter } from "@/lib/leads";
+import { isValidLead, getLeadStatus, isUnattendedLead, rowMatchesStatusFilter, rowMatchesDateFilter, isNameFieldKey, getLeadName } from "@/lib/leads";
 import { HARDCODED_STATUS_FILTERS } from "@/lib/defaults";
 import { TopToolbar } from "./TopToolbar";
 import { StatusFilterBar } from "./StatusFilterBar";
@@ -366,20 +366,32 @@ export function SpreadsheetApp() {
       if (!prev) return prev;
       const existing = prev.rows.find((r) => r.id === rowId);
       if (existing) {
+        const oldName = getLeadName(existing.data);
+        const nextData = { ...existing.data, [columnId]: value };
+        const newName = getLeadName(nextData);
+        const isNameChanged = isNameFieldKey(columnId) && oldName !== newName;
         return {
           ...prev,
           rows: prev.rows.map((r) =>
-            r.id === existing.id ? { ...r, data: { ...r.data, [columnId]: value } } : r
+            r.id === existing.id
+              ? {
+                  ...r,
+                  data: nextData,
+                  ...(isNameChanged ? { nameModifiedAt: new Date().toISOString() } : {}),
+                }
+              : r
           ),
         };
       }
+      const nowIso = new Date().toISOString();
       const newRow: RowData = {
         id: rowId,
         sheetId: prev.id,
         order: rowOrder,
         data: { [columnId]: value },
         styles: {},
-        createdAt: new Date().toISOString(),
+        nameModifiedAt: nowIso,
+        createdAt: nowIso,
       };
       return {
         ...prev,
@@ -441,15 +453,26 @@ export function SpreadsheetApp() {
       rows.forEach((r) => {
         const orderKey = r.order ?? 0;
         const exist = existingMap.get(orderKey);
+        const incomingData = typeof r.data === "string" ? JSON.parse(r.data) : r.data || {};
         if (exist) {
-          exist.data = { ...exist.data, ...(typeof r.data === "string" ? JSON.parse(r.data) : r.data || {}) };
+          const oldName = getLeadName(exist.data);
+          const merged = { ...exist.data, ...incomingData };
+          const newName = getLeadName(merged);
+          const isNameChanged = oldName !== newName && Object.keys(incomingData).some((k) => isNameFieldKey(k));
+          exist.data = merged;
+          if (isNameChanged) {
+            exist.nameModifiedAt = new Date().toISOString();
+          }
         } else {
+          const nowIso = new Date().toISOString();
           existingMap.set(orderKey, {
             id: r.id || `temp_${orderKey}`,
             sheetId: prev.id,
             order: orderKey,
-            data: typeof r.data === "string" ? JSON.parse(r.data) : r.data || {},
+            data: incomingData,
             styles: {},
+            nameModifiedAt: nowIso,
+            createdAt: nowIso,
           });
         }
       });

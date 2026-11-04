@@ -295,6 +295,35 @@ export function getLeadSource(rowData: Record<string, any> | undefined | null): 
 }
 
 /**
+ * Checks whether a column key represents a lead's name field.
+ */
+export function isNameFieldKey(key: string): boolean {
+  if (!key || typeof key !== "string") return false;
+  const kLower = key.trim().toLowerCase();
+  return (
+    kLower === "col_name" ||
+    kLower === "name" ||
+    kLower === "lead_name" ||
+    kLower === "client_name" ||
+    kLower === "lead name" ||
+    kLower === "client name"
+  );
+}
+
+/**
+ * Extracts lead name value from row data object.
+ */
+export function getLeadName(rowData: Record<string, any> | undefined | null): string {
+  if (!rowData || typeof rowData !== "object") return "";
+  for (const [k, v] of Object.entries(rowData)) {
+    if (isNameFieldKey(k) && v !== undefined && v !== null) {
+      return String(v).trim();
+    }
+  }
+  return "";
+}
+
+/**
  * Checks whether a row matches an active status filter.
  * When statusFilter is null, returns true for all rows.
  * When statusFilter is "Unattended", returns true ONLY if all 4 follow-up statuses are empty.

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { extractPhoneInfo, getRowPhoneNumber } from "@/lib/leads";
+import { extractPhoneInfo, getRowPhoneNumber, isNameFieldKey, getLeadName } from "@/lib/leads";
 
 // Helper to query duplicate phone number across all user sheets
 async function findDuplicateLead(phone: string, excludeRowId?: string) {
@@ -96,7 +96,7 @@ export async function GET(req: Request) {
   // If no phone check query, return accessible leads sorted by recent first
   const leads = await prisma.row.findMany({
     where: user.role === "ADMIN" ? {} : { sheet: { userId: user.id } },
-    orderBy: { createdAt: "desc" },
+    orderBy: { nameModifiedAt: "desc" },
     include: {
       sheet: {
         select: { id: true, name: true, userId: true },
@@ -112,6 +112,7 @@ export async function GET(req: Request) {
       phoneNumber: r.phoneNumber,
       data: JSON.parse(r.data || "{}"),
       styles: JSON.parse(r.styles || "{}"),
+      nameModifiedAt: (r.nameModifiedAt || r.createdAt).toISOString(),
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
       sheetName: r.sheet.name,
@@ -186,6 +187,7 @@ export async function POST(req: Request) {
         phoneDigits: phoneDigits || null,
         data: JSON.stringify(dataObj),
         styles: typeof body.styles === "string" ? body.styles : JSON.stringify(body.styles || {}),
+        nameModifiedAt: new Date(),
         ...extractFollowupDates(dataObj),
       },
     });
@@ -200,6 +202,7 @@ export async function POST(req: Request) {
           order: row.order,
           data: JSON.parse(row.data),
           styles: JSON.parse(row.styles || "{}"),
+          nameModifiedAt: (row.nameModifiedAt || row.createdAt).toISOString(),
           createdAt: row.createdAt.toISOString(),
           updatedAt: row.updatedAt.toISOString(),
         },
@@ -210,6 +213,120 @@ export async function POST(req: Request) {
     console.error("Error creating lead in /api/leads:", error);
     return NextResponse.json(
       { error: error.message || "Failed to create lead." },
+      { status: 500 }
+    );
+  }
+}
+
+// PATCH / PUT /api/leads - Update lead with selective nameModifiedAt bumping
+export async function PATCH(req: Request) {
+  return handleUpdateLead(req);
+}
+
+export async function PUT(req: Request) {
+  return handleUpdateLead(req);
+}
+
+async function handleUpdateLead(req: Request) {
+  const user = await getSessionUser(req);
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const body = await req.json();
+    const rowId = body.id || body.rowId || body.leadId;
+
+    if (!rowId) {
+      return NextResponse.json(
+        { error: "Lead ID (id / rowId / leadId) is required." },
+        { status: 400 }
+      );
+    }
+
+    const existing = await prisma.row.findUnique({
+      where: { id: rowId },
+      include: {
+        sheet: { select: { id: true, userId: true } },
+      },
+    });
+
+    if (!existing) {
+      return NextResponse.json({ error: "Lead not found." }, { status: 404 });
+    }
+
+    // Permission check
+    if (user.role !== "ADMIN" && existing.sheet?.userId !== user.id) {
+      return NextResponse.json(
+        { error: "Access denied. You do not have permission to update this lead." },
+        { status: 403 }
+      );
+    }
+
+    const currentData = JSON.parse(existing.data || "{}");
+    const incomingData =
+      typeof body.data === "string"
+        ? JSON.parse(body.data || "{}")
+        : body.data || {};
+
+    // Check duplicate phone number if phone is changed
+    const mergedData = { ...currentData, ...incomingData };
+    const newPhone = getRowPhoneNumber(mergedData);
+    if (newPhone) {
+      const dup = await findDuplicateLead(newPhone, rowId);
+      if (dup) {
+        return NextResponse.json(
+          {
+            error: `Duplicate Lead: This phone number already exists in ${dup.ownerName}'s system.`,
+            isDuplicate: true,
+            ownerName: dup.ownerName,
+            sheetName: dup.sheetName,
+            phoneNumber: newPhone,
+          },
+          { status: 409 }
+        );
+      }
+    }
+
+    const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(newPhone);
+
+    // CRITICAL: ONLY bump nameModifiedAt to new Date() if the Name field was explicitly modified!
+    // If only editing follow-up statuses, dates, lead sources, or other columns, do NOT update nameModifiedAt!
+    const oldName = getLeadName(currentData);
+    const newName = getLeadName(mergedData);
+    const hasNameKeyInPayload = Object.keys(incomingData).some((k) => isNameFieldKey(k));
+    const isNameChanged = hasNameKeyInPayload && oldName !== newName;
+
+    const updated = await prisma.row.update({
+      where: { id: rowId },
+      data: {
+        data: JSON.stringify(mergedData),
+        phoneNumber: phoneExact || null,
+        phoneDigits: phoneDigits || null,
+        ...(isNameChanged ? { nameModifiedAt: new Date() } : {}),
+        ...extractFollowupDates(mergedData),
+        ...(body.styles ? { styles: typeof body.styles === "string" ? body.styles : JSON.stringify(body.styles) } : {}),
+      },
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: "Lead updated successfully.",
+      lead: {
+        id: updated.id,
+        sheetId: updated.sheetId,
+        order: updated.order,
+        data: JSON.parse(updated.data),
+        styles: JSON.parse(updated.styles || "{}"),
+        nameModifiedAt: (updated.nameModifiedAt || updated.createdAt).toISOString(),
+        createdAt: updated.createdAt.toISOString(),
+        updatedAt: updated.updatedAt.toISOString(),
+      },
+    });
+  } catch (error: any) {
+    console.error("Error updating lead in /api/leads:", error);
+    return NextResponse.json(
+      { error: error.message || "Failed to update lead." },
       { status: 500 }
     );
   }

@@ -112,7 +112,7 @@ export async function GET(req: Request, { params }: Params) {
           select: { id: true, name: true, email: true, role: true },
         },
         rows: {
-          orderBy: { createdAt: "desc" },
+          orderBy: { nameModifiedAt: "desc" },
         },
       },
     });
@@ -161,6 +161,7 @@ export async function GET(req: Request, { params }: Params) {
         order: r.order,
         data,
         styles: JSON.parse(r.styles || "{}"),
+        nameModifiedAt: (r.nameModifiedAt || r.createdAt).toISOString(),
         createdAt: r.createdAt.toISOString(),
         updatedAt: r.updatedAt.toISOString(),
       };
