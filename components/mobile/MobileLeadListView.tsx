@@ -199,66 +199,79 @@ export function MobileLeadListView({
               <div
                 key={row.id}
                 onClick={() => onEditLead(row)}
-                className="bg-white rounded-xl px-3 py-2 border border-slate-200 shadow-2xs hover:shadow-xs active:bg-slate-50 transition-all cursor-pointer select-none"
+                className="bg-white rounded-xl px-3 py-2 sm:px-3.5 sm:py-2.5 border border-slate-200 shadow-2xs hover:shadow-xs active:bg-slate-50 transition-all cursor-pointer select-none"
               >
                 <div className="flex items-center gap-2.5">
-                  {/* Left: Compact Avatar Initial (Vertically Centered) */}
+                  {/* Left: Compact Avatar Initial */}
                   <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-slate-900 to-slate-800 text-amber-400 font-bold text-xs flex items-center justify-center shrink-0 shadow-inner border border-slate-700">
                     {initial}
                   </div>
 
-                  {/* Center: Compacted Text Layout (flex-col gap-0.5 leading-tight) */}
-                  <div className="min-w-0 flex-1 flex flex-col gap-0.5 leading-tight">
-                    {/* 1. Row 1: Strictly Lead Name Only */}
-                    <div className="flex items-center min-w-0">
+                  {/* Center: Main Content (3 rows) */}
+                  <div className="min-w-0 flex-1 flex flex-col gap-1 leading-tight">
+                    {/* 1. Top Row: Strictly Lead Name Only & Chevron */}
+                    <div className="flex items-center justify-between gap-1.5 min-w-0">
                       <h4 className="text-sm font-bold text-slate-900 truncate leading-tight" title={name}>
                         {name}
                       </h4>
+                      <ChevronRight className="h-4 w-4 text-slate-300 shrink-0" />
                     </div>
 
-                    {/* 2. Row 2: Display Phone Number */}
-                    <div className="flex items-center gap-1.5 font-mono text-[11px] sm:text-xs text-slate-600 truncate leading-tight">
-                      <Phone className="h-3 w-3 text-slate-400 shrink-0" />
-                      <span>{number}</span>
-                    </div>
-
-                    {/* 3. Row 3: Project Name + Lead Source (left) & Added Date (right) */}
-                    {(projectName || leadSource || addedDate) && (
-                      <div className="flex items-center justify-between gap-1.5 text-[10px] min-w-0 leading-tight pt-0.5 border-t border-slate-100">
-                        {/* Left: Project Name followed by Lead Source Chip */}
-                        <div className="flex items-center gap-1 min-w-0 flex-1 overflow-hidden">
-                          {projectName && (
+                    {/* 2. Middle Row: Phone Number + Project Name (left) & Call Button (right) */}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
+                        <div className="flex items-center gap-1 font-mono text-[11px] sm:text-xs text-slate-600 shrink-0">
+                          <Phone className="h-3 w-3 text-slate-400 shrink-0" />
+                          <span>{number}</span>
+                        </div>
+                        {projectName && (
+                          <>
+                            <span className="text-slate-300 shrink-0">•</span>
                             <span
-                              className="text-slate-600 font-semibold truncate max-w-[100px] sm:max-w-[150px]"
+                              className="text-[11px] sm:text-xs text-slate-600 font-medium truncate"
                               title={`Project: ${projectName}`}
                             >
                               {projectName}
                             </span>
-                          )}
+                          </>
+                        )}
+                      </div>
 
-                          {projectName && leadSource && (
-                            <span className="text-slate-300 shrink-0">•</span>
-                          )}
+                      {number && number !== "No Phone Number" && (
+                        <a
+                          href={`tel:${number}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="h-8.5 w-8.5 sm:h-9 sm:w-9 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 flex items-center justify-center border border-emerald-300 transition-all shrink-0 shadow-xs active:scale-90"
+                          title={`Call ${number}`}
+                          aria-label={`Call ${number}`}
+                        >
+                          <Phone className="h-4.5 w-4.5 text-emerald-600 fill-emerald-100/40" />
+                        </a>
+                      )}
+                    </div>
 
-                          {leadSource && (
-                            <span
-                              className={`px-1.5 py-0.2 rounded-full font-semibold border flex items-center gap-0.5 shadow-2xs shrink-0 truncate max-w-[90px] sm:max-w-[130px] ${
-                                sourceStyle?.bg || "bg-indigo-50"
-                              } ${sourceStyle?.text || "text-indigo-800 font-semibold"} ${
-                                sourceStyle?.border || "border-indigo-200"
-                              }`}
-                              title={`Lead Source: ${leadSource}`}
-                            >
-                              <Sparkles className="h-2 w-2 text-amber-500 shrink-0" />
-                              <span className="truncate">{leadSource}</span>
-                            </span>
-                          )}
-                        </div>
+                    {/* 3. Bottom Row: Source + Date Only */}
+                    {(leadSource || addedDate) && (
+                      <div className="flex items-center justify-between gap-2 text-[10px] min-w-0 leading-tight pt-1 border-t border-slate-100">
+                        {leadSource ? (
+                          <span
+                            className={`px-2 py-0.5 rounded-full font-semibold border flex items-center gap-1 shadow-2xs truncate max-w-[55%] ${
+                              sourceStyle?.bg || "bg-indigo-50"
+                            } ${sourceStyle?.text || "text-indigo-800 font-semibold"} ${
+                              sourceStyle?.border || "border-indigo-200"
+                            }`}
+                            title={`Lead Source: ${leadSource}`}
+                          >
+                            <Sparkles className="h-2.5 w-2.5 text-amber-500 shrink-0" />
+                            <span className="truncate">{leadSource}</span>
+                          </span>
+                        ) : (
+                          <span />
+                        )}
 
-                        {/* Right: Added Date */}
                         {addedDate && (
                           <span
-                            className="text-slate-400 font-medium flex items-center gap-0.5 shrink-0 ml-auto whitespace-nowrap"
+                            className="text-slate-400 font-medium flex items-center gap-1 shrink-0 ml-auto whitespace-nowrap"
                             title={row.createdAt ? `Lead added on ${new Date(row.createdAt).toLocaleString("en-IN")}` : undefined}
                           >
                             <Calendar className="h-2.5 w-2.5 text-slate-400" />
@@ -267,22 +280,6 @@ export function MobileLeadListView({
                         )}
                       </div>
                     )}
-                  </div>
-
-                  {/* Right: Enlarged Quick-Call Button & Chevron (Vertically Centered alongside text layout) */}
-                  <div className="flex items-center gap-1 shrink-0">
-                    {number && number !== "No Phone Number" && (
-                      <a
-                        href={`tel:${number}`}
-                        onClick={(e) => e.stopPropagation()}
-                        className="h-8.5 w-8.5 sm:h-9 sm:w-9 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 flex items-center justify-center border border-emerald-300 transition-all shrink-0 shadow-xs active:scale-90"
-                        title={`Call ${number}`}
-                        aria-label={`Call ${number}`}
-                      >
-                        <Phone className="h-4.5 w-4.5 text-emerald-600 fill-emerald-100/40" />
-                      </a>
-                    )}
-                    <ChevronRight className="h-4 w-4 text-slate-300 shrink-0" />
                   </div>
                 </div>
               </div>
