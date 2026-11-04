@@ -473,35 +473,29 @@ export function SpreadsheetGrid({
   const [draggedColIdx, setDraggedColIdx] = useState<number | null>(null);
   const [dragOverColIdx, setDragOverColIdx] = useState<number | null>(null);
 
-  // Sort rows by nameModifiedAt descending (strictly bumped to top on initial creation or when Name field is modified)
-  const sortedRows = useMemo(() => {
-    return [...sheet.rows].sort((a, b) => {
-      const timeA = a.nameModifiedAt
-        ? new Date(a.nameModifiedAt).getTime()
-        : a.createdAt
-        ? new Date(a.createdAt).getTime()
-        : 0;
-      const timeB = b.nameModifiedAt
-        ? new Date(b.nameModifiedAt).getTime()
-        : b.createdAt
-        ? new Date(b.createdAt).getTime()
-        : 0;
-      return timeB - timeA;
+  // Track max order of existing rows
+  const maxExistingOrder = useMemo(() => {
+    let max = -1;
+    sheet.rows.forEach((r, idx) => {
+      const order = r.order !== undefined ? r.order : idx;
+      if (order > max) max = order;
     });
+    return max;
   }, [sheet.rows]);
 
   const totalRowCount = useMemo(() => {
-    return Math.max(1000, sortedRows.length + 10, expandedRowCount);
-  }, [sortedRows.length, expandedRowCount]);
+    return Math.max(1000, maxExistingOrder + 1, expandedRowCount);
+  }, [maxExistingOrder, expandedRowCount]);
 
-  // Fast map from row index to database RowData (newest leads placed at row 0, 1, 2...)
+  // Fast map from row index to database RowData
   const rowsByOrder = useMemo(() => {
     const map = new Map<number, RowData>();
-    sortedRows.forEach((r, idx) => {
-      map.set(idx, r);
+    sheet.rows.forEach((r, idx) => {
+      const order = r.order !== undefined ? r.order : idx;
+      map.set(order, r);
     });
     return map;
-  }, [sortedRows]);
+  }, [sheet.rows]);
 
   // Helper to get row data at index
   const getRowAtIndex = useCallback(
@@ -548,22 +542,22 @@ export function SpreadsheetGrid({
 
   const filteredRowIndices = useMemo(() => {
     if (!isFiltered) return [];
-    const indices: number[] = [];
-    sortedRows.forEach((r, idx) => {
-      if (!isValidLead(r.data)) return;
-      if (dateFilter && !rowMatchesDateFilter(r.createdAt, dateFilter)) return;
-      if (statusFilter && !rowMatchesStatusFilter(r.data, statusFilter, sheet.columns)) return;
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matches = Object.values(r.data || {}).some((val) =>
-          String(val || "").toLowerCase().includes(q)
-        );
-        if (!matches) return;
-      }
-      indices.push(idx);
-    });
-    return indices;
-  }, [sortedRows, isFiltered, dateFilter, statusFilter, searchQuery, sheet.columns]);
+    return sheet.rows
+      .filter((r) => {
+        if (!isValidLead(r.data)) return false;
+        if (dateFilter && !rowMatchesDateFilter(r.createdAt, dateFilter)) return false;
+        if (statusFilter && !rowMatchesStatusFilter(r.data, statusFilter, sheet.columns)) return false;
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          const matches = Object.values(r.data || {}).some((val) =>
+            String(val || "").toLowerCase().includes(q)
+          );
+          if (!matches) return false;
+        }
+        return true;
+      })
+      .map((r, idx) => (r.order !== undefined ? r.order : idx));
+  }, [sheet.rows, isFiltered, dateFilter, statusFilter, searchQuery, sheet.columns]);
 
   // Focus editing input on entering edit mode
   useEffect(() => {

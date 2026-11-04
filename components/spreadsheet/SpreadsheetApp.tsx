@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { SheetMeta, SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
-import { isValidLead, getLeadStatus, isUnattendedLead, rowMatchesStatusFilter, rowMatchesDateFilter, isNameFieldKey, getLeadName } from "@/lib/leads";
+import { isValidLead, getLeadStatus, isUnattendedLead, rowMatchesStatusFilter, rowMatchesDateFilter } from "@/lib/leads";
 import { HARDCODED_STATUS_FILTERS } from "@/lib/defaults";
 import { TopToolbar } from "./TopToolbar";
 import { StatusFilterBar } from "./StatusFilterBar";
@@ -340,7 +340,9 @@ export function SpreadsheetApp() {
   // Get active cell value
   const getActiveCellValue = (): string => {
     if (!activeSheet || !activeCell) return "";
-    const row = activeSheet.rows[activeCell.rowIdx];
+    const row = activeSheet.rows.find(
+      (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
+    );
     if (!row) return "";
     return row.data[activeCell.colId] || "";
   };
@@ -348,7 +350,9 @@ export function SpreadsheetApp() {
   // Get active cell style
   const getActiveCellStyle = (): CellStyle => {
     if (!activeSheet || !activeCell) return {};
-    const row = activeSheet.rows[activeCell.rowIdx];
+    const row = activeSheet.rows.find(
+      (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
+    );
     if (!row || !row.styles) return {};
     return row.styles[activeCell.colId] || {};
   };
@@ -364,38 +368,31 @@ export function SpreadsheetApp() {
     // Optimistically update local state immediately for zero-lag UI
     setActiveSheet((prev) => {
       if (!prev) return prev;
-      const existing = prev.rows.find((r) => r.id === rowId);
+      const existing = prev.rows.find((r) => r.id === rowId || (order !== undefined && r.order === order));
       if (existing) {
-        const oldName = getLeadName(existing.data);
-        const nextData = { ...existing.data, [columnId]: value };
-        const newName = getLeadName(nextData);
-        const isNameChanged = isNameFieldKey(columnId) && oldName !== newName;
         return {
           ...prev,
           rows: prev.rows.map((r) =>
             r.id === existing.id
               ? {
                   ...r,
-                  data: nextData,
-                  ...(isNameChanged ? { nameModifiedAt: new Date().toISOString() } : {}),
+                  data: { ...r.data, [columnId]: value },
                 }
               : r
           ),
         };
       }
-      const nowIso = new Date().toISOString();
       const newRow: RowData = {
         id: rowId,
         sheetId: prev.id,
         order: rowOrder,
         data: { [columnId]: value },
         styles: {},
-        nameModifiedAt: nowIso,
-        createdAt: nowIso,
+        createdAt: new Date().toISOString(),
       };
       return {
         ...prev,
-        rows: [newRow, ...prev.rows],
+        rows: [...prev.rows, newRow],
       };
     });
 
@@ -455,24 +452,15 @@ export function SpreadsheetApp() {
         const exist = existingMap.get(orderKey);
         const incomingData = typeof r.data === "string" ? JSON.parse(r.data) : r.data || {};
         if (exist) {
-          const oldName = getLeadName(exist.data);
-          const merged = { ...exist.data, ...incomingData };
-          const newName = getLeadName(merged);
-          const isNameChanged = oldName !== newName && Object.keys(incomingData).some((k) => isNameFieldKey(k));
-          exist.data = merged;
-          if (isNameChanged) {
-            exist.nameModifiedAt = new Date().toISOString();
-          }
+          exist.data = { ...exist.data, ...incomingData };
         } else {
-          const nowIso = new Date().toISOString();
           existingMap.set(orderKey, {
             id: r.id || `temp_${orderKey}`,
             sheetId: prev.id,
             order: orderKey,
             data: incomingData,
             styles: {},
-            nameModifiedAt: nowIso,
-            createdAt: nowIso,
+            createdAt: new Date().toISOString(),
           });
         }
       });
@@ -896,7 +884,9 @@ export function SpreadsheetApp() {
           cellValue={getActiveCellValue()}
           onCellValueChange={(val) => {
             if (activeSheet && activeCell) {
-              const row = activeSheet.rows[activeCell.rowIdx];
+              const row = activeSheet.rows.find(
+                (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
+              );
               handleUpdateCell(
                 row ? row.id : `temp_${activeCell.rowIdx}`,
                 activeCell.colId,

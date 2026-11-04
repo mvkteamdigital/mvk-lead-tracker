@@ -55,40 +55,26 @@ export function MobileLeadListView({
   onAddNewLead,
 }: MobileLeadListViewProps) {
   // Filter only rows that have actual valid lead data (name, number, project, or other non-empty field)
-  // and sort by creation date descending (newest leads always at the top of the mobile card feed)
+  // in their default sequential order as returned from the database
   const leads = useMemo(() => {
-    return sheet.rows
-      .filter((r) => {
-        if (!isValidLead(r.data)) return false;
+    return sheet.rows.filter((r) => {
+      if (!isValidLead(r.data)) return false;
 
-        // Filter by date added if set
-        if (dateFilter && !rowMatchesDateFilter(r.createdAt, dateFilter)) {
-          return false;
-        }
+      // Filter by date added if set
+      if (dateFilter && !rowMatchesDateFilter(r.createdAt, dateFilter)) {
+        return false;
+      }
 
-        if (statusFilter && !rowMatchesStatusFilter(r.data, statusFilter, sheet.columns)) {
-          return false;
-        }
+      if (statusFilter && !rowMatchesStatusFilter(r.data, statusFilter, sheet.columns)) {
+        return false;
+      }
 
-        if (!searchQuery.trim()) return true;
-        const q = searchQuery.toLowerCase();
-        return Object.values(r.data || {}).some((val) =>
-          String(val || "").toLowerCase().includes(q)
-        );
-      })
-      .sort((a, b) => {
-        const timeA = a.nameModifiedAt
-          ? new Date(a.nameModifiedAt).getTime()
-          : a.createdAt
-          ? new Date(a.createdAt).getTime()
-          : 0;
-        const timeB = b.nameModifiedAt
-          ? new Date(b.nameModifiedAt).getTime()
-          : b.createdAt
-          ? new Date(b.createdAt).getTime()
-          : 0;
-        return timeB - timeA;
-      });
+      if (!searchQuery.trim()) return true;
+      const q = searchQuery.toLowerCase();
+      return Object.values(r.data || {}).some((val) =>
+        String(val || "").toLowerCase().includes(q)
+      );
+    });
   }, [sheet.rows, searchQuery, statusFilter, dateFilter, sheet.columns]);
 
   return (

@@ -93,10 +93,10 @@ export async function GET(req: Request) {
     return NextResponse.json({ exists: false });
   }
 
-  // If no phone check query, return accessible leads sorted by recent first
+  // If no phone check query, return accessible leads in default order
   const leads = await prisma.row.findMany({
     where: user.role === "ADMIN" ? {} : { sheet: { userId: user.id } },
-    orderBy: { nameModifiedAt: "desc" },
+    orderBy: { order: "asc" },
     include: {
       sheet: {
         select: { id: true, name: true, userId: true },

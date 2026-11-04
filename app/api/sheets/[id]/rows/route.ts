@@ -220,7 +220,7 @@ export async function PUT(req: Request, { params }: Params) {
 
       const updatedRows = await prisma.row.findMany({
         where: { sheetId },
-        orderBy: { nameModifiedAt: "desc" },
+        orderBy: { order: "asc" },
       });
 
       return NextResponse.json({

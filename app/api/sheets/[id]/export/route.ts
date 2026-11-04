@@ -23,7 +23,7 @@ export async function GET(req: Request, { params }: Params) {
       where: { id },
       include: {
         rows: {
-          orderBy: { nameModifiedAt: "desc" },
+          orderBy: { order: "asc" },
         },
       },
     });
