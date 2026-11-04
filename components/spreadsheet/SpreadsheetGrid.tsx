@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
 import { STATUS_COLORS, SOURCE_COLORS } from "@/lib/defaults";
-import { rowMatchesStatusFilter } from "@/lib/leads";
+import { rowMatchesStatusFilter, rowMatchesDateFilter, isValidLead, formatDateDisplay } from "@/lib/leads";
 import {
   ChevronDown,
   Trash2,
@@ -33,6 +33,7 @@ interface SpreadsheetGridProps {
   setActiveCell: (cell: { rowIdx: number; colId: string; colName: string } | null) => void;
   searchQuery: string;
   statusFilter?: string | null;
+  dateFilter?: string | null;
   onUndo?: () => void;
   onRedo?: () => void;
   canUndo?: boolean;
@@ -54,6 +55,7 @@ export function SpreadsheetGrid({
   setActiveCell,
   searchQuery,
   statusFilter = null,
+  dateFilter = null,
   onUndo,
   onRedo,
   canUndo,
@@ -172,6 +174,28 @@ export function SpreadsheetGrid({
     }
     return indices;
   }, [startIndex, endIndex]);
+
+  // Dynamic filter state: when searching, filtering by date, or filtering by status
+  const isFiltered = Boolean(dateFilter || statusFilter || searchQuery.trim());
+
+  const filteredRowIndices = useMemo(() => {
+    if (!isFiltered) return [];
+    return sheet.rows
+      .filter((r) => {
+        if (!isValidLead(r.data)) return false;
+        if (dateFilter && !rowMatchesDateFilter(r.createdAt, dateFilter)) return false;
+        if (statusFilter && !rowMatchesStatusFilter(r.data, statusFilter, sheet.columns)) return false;
+        if (searchQuery.trim()) {
+          const q = searchQuery.toLowerCase();
+          const matches = Object.values(r.data || {}).some((val) =>
+            String(val || "").toLowerCase().includes(q)
+          );
+          if (!matches) return false;
+        }
+        return true;
+      })
+      .map((r, idx) => (r.order !== undefined ? r.order : idx));
+  }, [sheet.rows, isFiltered, dateFilter, statusFilter, searchQuery, sheet.columns]);
 
   // Focus editing input on entering edit mode
   useEffect(() => {
@@ -1133,30 +1157,35 @@ export function SpreadsheetGrid({
 
           {/* Table Body with Windowing for 1,000 Rows */}
           <tbody>
-            {/* Top Spacer */}
-            {topSpacerHeight > 0 && (
+            {/* Top Spacer (only in unfiltered 1,000-row mode) */}
+            {!isFiltered && topSpacerHeight > 0 && (
               <tr style={{ height: `${topSpacerHeight}px` }}>
                 <td colSpan={sheet.columns.length + 1} className="border-b border-slate-300" />
               </tr>
             )}
 
-            {/* Visible Rows */}
-            {visibleRowIndices.map((rowIdx) => {
+            {/* Empty state when filtered and no leads match */}
+            {isFiltered && filteredRowIndices.length === 0 && (
+              <tr>
+                <td colSpan={sheet.columns.length + 1} className="py-16 text-center bg-white border-b border-slate-200">
+                  <div className="flex flex-col items-center justify-center gap-2 max-w-sm mx-auto text-slate-500">
+                    <div className="h-12 w-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center">
+                      <Calendar className="h-6 w-6" />
+                    </div>
+                    <h4 className="text-sm font-bold text-slate-800">No leads match the active filters</h4>
+                    <p className="text-xs text-slate-500">
+                      {dateFilter
+                        ? `No leads were added on ${formatDateDisplay(dateFilter)}.`
+                        : "Try selecting a different date or status option."}
+                    </p>
+                  </div>
+                </td>
+              </tr>
+            )}
+
+            {/* Rows to render (filtered leads consecutively, or virtualized window) */}
+            {(isFiltered ? filteredRowIndices : visibleRowIndices).map((rowIdx) => {
               const row = getRowAtIndex(rowIdx);
-
-              // Check if matches status filter
-              if (statusFilter && !rowMatchesStatusFilter(row.data, statusFilter, sheet.columns)) {
-                return null;
-              }
-
-              // Check if matches search
-              if (searchQuery.trim()) {
-                const q = searchQuery.toLowerCase();
-                const matches = Object.values(row.data).some((val) =>
-                  String(val || "").toLowerCase().includes(q)
-                );
-                if (!matches) return null;
-              }
 
               const isRowSelected =
                 selectionRange !== null &&
@@ -1337,8 +1366,8 @@ export function SpreadsheetGrid({
               );
             })}
 
-            {/* Bottom Spacer */}
-            {bottomSpacerHeight > 0 && (
+            {/* Bottom Spacer (only in unfiltered 1,000-row mode) */}
+            {!isFiltered && bottomSpacerHeight > 0 && (
               <tr style={{ height: `${bottomSpacerHeight}px` }}>
                 <td colSpan={sheet.columns.length + 1} className="border-b border-slate-300" />
               </tr>

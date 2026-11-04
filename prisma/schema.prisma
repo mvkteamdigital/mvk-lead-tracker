@@ -55,4 +55,5 @@ model Row {
   @@index([sheetId])
   @@index([phoneNumber])
   @@index([phoneDigits])
+  @@index([createdAt])
 }

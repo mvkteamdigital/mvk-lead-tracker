@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { SheetMeta, SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
-import { isValidLead, getLeadStatus, rowMatchesStatusFilter } from "@/lib/leads";
+import { isValidLead, getLeadStatus, rowMatchesStatusFilter, rowMatchesDateFilter } from "@/lib/leads";
 import { DEFAULT_FOLLOWUP_OPTIONS } from "@/lib/defaults";
 import { TopToolbar } from "./TopToolbar";
 import { StatusFilterBar } from "./StatusFilterBar";
@@ -52,19 +52,36 @@ export function SpreadsheetApp() {
   const [isLeadFormModalOpen, setIsLeadFormModalOpen] = useState(false);
   const [editingLeadForModal, setEditingLeadForModal] = useState<RowData | null>(null);
 
-  // Dynamic Status Filter state
+  // Dynamic Status & Date Filter state
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [dateFilter, setDateFilter] = useState<string | null>(null);
 
-  // Reset status filter when switching sheets
+  // Reset filters when switching sheets
   useEffect(() => {
     setStatusFilter(null);
+    setDateFilter(null);
   }, [activeSheetId]);
 
-  // Derived state: accurately count valid leads for the active sheet in real-time
+  // Derived state: accurately count all valid leads for the active sheet in real-time (all-time)
   const activeSheetValidLeadCount = useMemo(() => {
     if (!activeSheet || !activeSheet.rows) return 0;
     return activeSheet.rows.filter((r) => isValidLead(r.data)).length;
   }, [activeSheet]);
+
+  // Derived state: leads matching the active dateFilter (if set, only leads added on that exact date!)
+  const activeSheetDateFilteredRows = useMemo(() => {
+    if (!activeSheet || !activeSheet.rows) return [];
+    return activeSheet.rows.filter((r) => {
+      if (!isValidLead(r.data)) return false;
+      if (dateFilter && !rowMatchesDateFilter(r.createdAt, dateFilter)) {
+        return false;
+      }
+      return true;
+    });
+  }, [activeSheet, dateFilter]);
+
+  // Real-time displayed lead count: when date filter is active, reflects ONLY leads added on that date!
+  const displayedLeadCount = dateFilter ? activeSheetDateFilteredRows.length : activeSheetValidLeadCount;
 
   // Dynamically extract all available custom dropdown options from the active sheet.
   // When a user adds an option via "Customize Dropdowns", activeSheet.columns updates,
@@ -86,25 +103,25 @@ export function SpreadsheetApp() {
     return Array.from(optionsSet);
   }, [activeSheet?.columns]);
 
-  // Real-time summary metric counters for each status option + Unassigned
+  // Real-time summary metric counters for each status option + Unassigned.
+  // When dateFilter is active, status counters automatically update to count ONLY leads added on that date!
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
     if (!activeSheet || !activeSheet.rows) return counts;
 
-    const validRows = activeSheet.rows.filter((r) => isValidLead(r.data));
-
+    // Use activeSheetDateFilteredRows so status metrics automatically respect date-wise filtering!
     availableStatusOptions.forEach((opt) => {
-      counts[opt] = validRows.filter((r) =>
+      counts[opt] = activeSheetDateFilteredRows.filter((r) =>
         rowMatchesStatusFilter(r.data, opt, activeSheet.columns)
       ).length;
     });
 
-    counts["Unassigned"] = validRows.filter(
+    counts["Unassigned"] = activeSheetDateFilteredRows.filter(
       (r) => getLeadStatus(r.data, activeSheet.columns) === "Unassigned"
     ).length;
 
     return counts;
-  }, [activeSheet, availableStatusOptions]);
+  }, [activeSheet, availableStatusOptions, activeSheetDateFilteredRows]);
 
   // Derived state: sheet list with reactive real-time valid lead count for the active tab
   const displayedSheets = useMemo(() => {
@@ -809,18 +826,22 @@ export function SpreadsheetApp() {
         onRedo={handleRedo}
         canUndo={undoStack.length > 0}
         canRedo={redoStack.length > 0}
-        totalLeads={activeSheetValidLeadCount}
+        totalLeads={displayedLeadCount}
+        dateFilter={dateFilter}
         onRefresh={handleRefreshFromDB}
         isRefreshing={isRefreshing}
       />
 
-      {/* 2. Dynamic Status Filter Bar & Summary Metrics (Mobile & Desktop) */}
+      {/* 2. Dynamic Status & Date Filter Bar & Summary Metrics (Mobile & Desktop) */}
       <StatusFilterBar
-        totalLeads={activeSheetValidLeadCount}
+        totalLeads={displayedLeadCount}
+        allTimeTotalLeads={activeSheetValidLeadCount}
         availableStatuses={availableStatusOptions}
         statusCounts={statusCounts}
         activeFilter={statusFilter}
         onSelectFilter={setStatusFilter}
+        dateFilter={dateFilter}
+        onSelectDate={setDateFilter}
         onOpenDropdownModal={() => {
           const dropdownCol =
             activeSheet?.columns.find((c) => c.type === "dropdown") || null;
@@ -881,6 +902,8 @@ export function SpreadsheetApp() {
                 searchQuery={searchQuery}
                 onSearchChange={setSearchQuery}
                 statusFilter={statusFilter}
+                dateFilter={dateFilter}
+                onSelectDate={setDateFilter}
                 onEditLead={(lead) => {
                   setEditingLeadForModal(lead);
                   setIsLeadFormModalOpen(true);
@@ -909,6 +932,7 @@ export function SpreadsheetApp() {
                 setActiveCell={setActiveCell}
                 searchQuery={searchQuery}
                 statusFilter={statusFilter}
+                dateFilter={dateFilter}
                 onUndo={handleUndo}
                 onRedo={handleRedo}
                 canUndo={undoStack.length > 0}

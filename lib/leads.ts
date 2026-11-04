@@ -258,3 +258,50 @@ export function getRowPhoneNumber(data: Record<string, any> | undefined | null):
     "";
   return typeof num === "string" ? num.trim() : String(num || "").trim();
 }
+
+/**
+ * Checks whether a row's createdAt timestamp matches the selected filter date (YYYY-MM-DD).
+ * Accurately compares against both local calendar date and UTC date to avoid any timezone offset issues.
+ */
+export function rowMatchesDateFilter(
+  createdAt: string | Date | undefined | null,
+  filterDate: string | null
+): boolean {
+  if (!filterDate) return true;
+  if (!createdAt) return false;
+
+  try {
+    const d = typeof createdAt === "string" ? new Date(createdAt) : createdAt;
+    if (isNaN(d.getTime())) return false;
+
+    // 1. Local date YYYY-MM-DD
+    const localYear = d.getFullYear();
+    const localMonth = String(d.getMonth() + 1).padStart(2, "0");
+    const localDay = String(d.getDate()).padStart(2, "0");
+    const localYMD = `${localYear}-${localMonth}-${localDay}`;
+    if (localYMD === filterDate) return true;
+
+    // 2. UTC date YYYY-MM-DD (fallback for UTC-stored timestamps)
+    const utcYMD = d.toISOString().split("T")[0];
+    if (utcYMD === filterDate) return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Formats a YYYY-MM-DD string into a clean display format like "Nov 4, 2026"
+ */
+export function formatDateDisplay(dateStr: string | null | undefined): string {
+  if (!dateStr) return "";
+  try {
+    const [year, month, day] = dateStr.split("-").map(Number);
+    if (!year || !month || !day) return dateStr;
+    const d = new Date(year, month - 1, day);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  } catch {
+    return dateStr;
+  }
+}

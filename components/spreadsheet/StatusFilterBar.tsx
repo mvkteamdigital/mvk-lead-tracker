@@ -2,7 +2,8 @@
 
 import React, { useRef } from "react";
 import { STATUS_COLORS } from "@/lib/defaults";
-import { Users, Filter, X, ChevronLeft, ChevronRight, Settings2 } from "lucide-react";
+import { formatDateDisplay } from "@/lib/leads";
+import { Users, Filter, X, ChevronLeft, ChevronRight, Settings2, Calendar } from "lucide-react";
 
 interface StatusFilterBarProps {
   totalLeads: number;
@@ -10,6 +11,9 @@ interface StatusFilterBarProps {
   statusCounts: Record<string, number>;
   activeFilter: string | null;
   onSelectFilter: (status: string | null) => void;
+  dateFilter?: string | null;
+  onSelectDate?: (date: string | null) => void;
+  allTimeTotalLeads?: number;
   onOpenDropdownModal?: () => void;
 }
 
@@ -29,6 +33,9 @@ export function StatusFilterBar({
   statusCounts,
   activeFilter,
   onSelectFilter,
+  dateFilter = null,
+  onSelectDate,
+  allTimeTotalLeads,
   onOpenDropdownModal,
 }: StatusFilterBarProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -48,10 +55,58 @@ export function StatusFilterBar({
   const unassignedCount = statusCounts["Unassigned"] || 0;
 
   return (
-    <div className="bg-white border-b border-slate-200 px-3 sm:px-4 py-2 flex items-center gap-2 select-none shadow-2xs shrink-0 z-20">
+    <div className="bg-white border-b border-slate-200 px-3 sm:px-4 py-2 flex items-center gap-2 select-none shadow-2xs shrink-0 z-20 overflow-x-auto no-scrollbar">
       
+      {/* 1. Date Added Filter Input (Responsive for Mobile & Desktop) */}
+      <div
+        className={`flex items-center gap-1.5 shrink-0 rounded-xl px-2.5 py-1 text-xs border transition-all ${
+          dateFilter
+            ? "bg-amber-50 border-amber-300 ring-2 ring-amber-400/40 text-amber-950 font-bold shadow-2xs"
+            : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700"
+        }`}
+      >
+        <Calendar className={`h-3.5 w-3.5 ${dateFilter ? "text-amber-600" : "text-slate-400"} shrink-0`} />
+        <label htmlFor="filter-date-added" className="text-[11px] font-bold text-slate-700 whitespace-nowrap cursor-pointer">
+          <span className="hidden sm:inline">Date Added:</span>
+          <span className="sm:hidden">Date:</span>
+        </label>
+        <input
+          id="filter-date-added"
+          type="date"
+          value={dateFilter || ""}
+          onChange={(e) => onSelectDate?.(e.target.value || null)}
+          className="text-xs bg-transparent border-0 outline-none text-slate-800 font-semibold cursor-pointer p-0 w-[115px] sm:w-[125px]"
+          title="Filter leads by exact date added"
+        />
+        {dateFilter ? (
+          <button
+            type="button"
+            onClick={() => onSelectDate?.(null)}
+            className="p-1 hover:bg-amber-200/70 text-amber-800 hover:text-amber-950 rounded-full transition-colors cursor-pointer"
+            title="Clear date filter"
+          >
+            <X className="h-3 w-3" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => {
+              const today = new Date();
+              const ymd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+              onSelectDate?.(ymd);
+            }}
+            className="text-[10px] font-bold text-amber-700 hover:text-amber-950 bg-amber-100 hover:bg-amber-200 px-1.5 py-0.5 rounded transition-colors cursor-pointer"
+            title="Filter to leads added today"
+          >
+            Today
+          </button>
+        )}
+      </div>
+
+      <div className="h-4 w-px bg-slate-200 shrink-0" />
+
       {/* Filter Label Icon on Desktop */}
-      <div className="hidden sm:flex items-center gap-1 text-slate-400 shrink-0 text-xs font-semibold mr-1">
+      <div className="hidden lg:flex items-center gap-1 text-slate-400 shrink-0 text-xs font-semibold mr-0.5">
         <Filter className="h-3.5 w-3.5 text-amber-500" />
         <span className="text-[11px] uppercase tracking-wider text-slate-500 font-bold">Status:</span>
       </div>
@@ -69,10 +124,10 @@ export function StatusFilterBar({
       {/* Main Filter Badges Scroll Container */}
       <div
         ref={scrollRef}
-        className="flex-1 flex items-center gap-1.5 overflow-x-auto no-scrollbar scroll-smooth py-0.5"
+        className="flex-1 flex items-center gap-1.5 overflow-x-auto no-scrollbar scroll-smooth py-0.5 min-w-0"
         style={{ scrollbarWidth: "none" }}
       >
-        {/* 1. Total Lead Count Badge (e.g., "29 Leads" / All Filter) */}
+        {/* 2. Total Lead Count Badge (reflects real-time count for date added if filtered) */}
         <button
           type="button"
           onClick={() => onSelectFilter(null)}
@@ -81,10 +136,16 @@ export function StatusFilterBar({
               ? "bg-slate-900 text-white shadow-xs ring-2 ring-slate-900 ring-offset-1"
               : "bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200"
           }`}
-          title="Show all leads"
+          title={
+            dateFilter
+              ? `Showing ${totalLeads} leads added on ${formatDateDisplay(dateFilter)}`
+              : "Show all leads"
+          }
         >
           <Users className="h-3.5 w-3.5 text-amber-400 shrink-0" />
-          <span className="whitespace-nowrap">{totalLeads} {totalLeads === 1 ? "Lead" : "Leads"}</span>
+          <span className="whitespace-nowrap">
+            {totalLeads} {totalLeads === 1 ? "Lead" : "Leads"}
+          </span>
           <span
             className={`text-[10px] px-1.5 py-0.2 rounded-full font-extrabold ${
               activeFilter === null
@@ -92,13 +153,13 @@ export function StatusFilterBar({
                 : "bg-slate-200 text-slate-700"
             }`}
           >
-            All
+            {dateFilter ? "On Date" : "All"}
           </span>
         </button>
 
         <div className="h-4 w-px bg-slate-200 shrink-0 mx-1" />
 
-        {/* 2. Dynamic Status Badges with Live Summary Counts */}
+        {/* 3. Dynamic Status Badges with Live Summary Counts (synchronized to date filter) */}
         {availableStatuses.map((status, idx) => {
           const count = statusCounts[status] || 0;
           const isSelected = activeFilter === status;
@@ -114,7 +175,7 @@ export function StatusFilterBar({
                   ? `ring-2 ring-blue-600 font-bold shadow-xs ${color.bg} ${color.text} ${color.border}`
                   : `${color.bg} ${color.text} ${color.border} hover:brightness-95 opacity-90 hover:opacity-100`
               }`}
-              title={`Filter by ${status} (${count} leads)`}
+              title={`Filter by ${status} (${count} leads${dateFilter ? ` on ${formatDateDisplay(dateFilter)}` : ""})`}
             >
               <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80 shrink-0" />
               <span className="truncate max-w-[150px] sm:max-w-none">{status}:</span>
@@ -134,7 +195,7 @@ export function StatusFilterBar({
           );
         })}
 
-        {/* 3. Unassigned / Pending Count Badge (if any leads without status exist) */}
+        {/* 4. Unassigned / Pending Count Badge */}
         {unassignedCount > 0 && (
           <button
             type="button"
@@ -144,7 +205,7 @@ export function StatusFilterBar({
                 ? "ring-2 ring-blue-600 font-bold shadow-xs bg-slate-200 text-slate-900 border-slate-400"
                 : "bg-slate-100 text-slate-600 border-slate-300 hover:bg-slate-200"
             }`}
-            title={`Filter by Pending / Unassigned (${unassignedCount} leads)`}
+            title={`Filter by Pending / Unassigned (${unassignedCount} leads${dateFilter ? ` on ${formatDateDisplay(dateFilter)}` : ""})`}
           >
             <span className="h-1.5 w-1.5 rounded-full bg-slate-400 shrink-0" />
             <span className="whitespace-nowrap">Pending / New:</span>
@@ -174,16 +235,19 @@ export function StatusFilterBar({
         <ChevronRight className="h-3.5 w-3.5" />
       </button>
 
-      {/* Clear Filter Shortcut (if active) */}
-      {activeFilter && (
+      {/* Clear Filter Shortcut (if activeFilter or dateFilter is active) */}
+      {(activeFilter || dateFilter) && (
         <button
           type="button"
-          onClick={() => onSelectFilter(null)}
-          className="text-xs text-rose-600 hover:text-rose-700 font-bold px-2 py-1 rounded hover:bg-rose-50 transition-colors shrink-0 flex items-center gap-1"
-          title="Reset filter to show all leads"
+          onClick={() => {
+            onSelectFilter(null);
+            onSelectDate?.(null);
+          }}
+          className="text-xs text-rose-600 hover:text-rose-700 font-bold px-2 py-1 rounded hover:bg-rose-50 transition-colors shrink-0 flex items-center gap-1 cursor-pointer"
+          title="Reset all filters to show all leads"
         >
           <X className="h-3 w-3" />
-          <span className="hidden sm:inline">Clear Filter</span>
+          <span className="hidden sm:inline">Clear {dateFilter && activeFilter ? "All" : "Filter"}</span>
         </button>
       )}
 

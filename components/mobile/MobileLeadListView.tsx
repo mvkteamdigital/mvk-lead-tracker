@@ -2,7 +2,14 @@
 
 import React, { useMemo } from "react";
 import { SheetDetail, RowData, ColumnDef } from "@/lib/types";
-import { isValidLead, getLeadStatus, getLeadFollowupDate, rowMatchesStatusFilter } from "@/lib/leads";
+import {
+  isValidLead,
+  getLeadStatus,
+  getLeadFollowupDate,
+  rowMatchesStatusFilter,
+  rowMatchesDateFilter,
+  formatDateDisplay,
+} from "@/lib/leads";
 import { STATUS_COLORS, SOURCE_COLORS } from "@/lib/defaults";
 import {
   User,
@@ -22,6 +29,8 @@ interface MobileLeadListViewProps {
   searchQuery: string;
   onSearchChange?: (query: string) => void;
   statusFilter?: string | null;
+  dateFilter?: string | null;
+  onSelectDate?: (date: string | null) => void;
   onEditLead: (row: RowData) => void;
   onAddNewLead: () => void;
 }
@@ -31,6 +40,8 @@ export function MobileLeadListView({
   searchQuery,
   onSearchChange,
   statusFilter = null,
+  dateFilter = null,
+  onSelectDate,
   onEditLead,
   onAddNewLead,
 }: MobileLeadListViewProps) {
@@ -38,6 +49,11 @@ export function MobileLeadListView({
   const leads = useMemo(() => {
     return sheet.rows.filter((r) => {
       if (!isValidLead(r.data)) return false;
+
+      // Filter by date added if set
+      if (dateFilter && !rowMatchesDateFilter(r.createdAt, dateFilter)) {
+        return false;
+      }
 
       if (statusFilter && !rowMatchesStatusFilter(r.data, statusFilter, sheet.columns)) {
         return false;
@@ -49,17 +65,31 @@ export function MobileLeadListView({
         String(val || "").toLowerCase().includes(q)
       );
     });
-  }, [sheet.rows, searchQuery, statusFilter, sheet.columns]);
+  }, [sheet.rows, searchQuery, statusFilter, dateFilter, sheet.columns]);
 
   return (
     <div className="flex-1 flex flex-col bg-slate-100 overflow-y-auto relative pb-28">
       {/* Mobile Top Summary Pill */}
       <div className="px-4 py-2.5 bg-white border-b border-slate-200 flex items-center justify-between text-xs shadow-2xs sticky top-0 z-20">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="font-bold text-slate-900">{sheet.name}</span>
           <span className="px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 font-bold text-[10px] border border-amber-300">
             {leads.length} {leads.length === 1 ? "Lead" : "Leads"}
           </span>
+          {dateFilter && (
+            <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-900 font-semibold text-[10px] border border-amber-300 flex items-center gap-1 shadow-2xs">
+              <Calendar className="h-3 w-3 text-amber-600" />
+              <span>{formatDateDisplay(dateFilter)}</span>
+              <button
+                type="button"
+                onClick={() => onSelectDate?.(null)}
+                className="p-0.5 hover:text-rose-600 rounded-full"
+                title="Clear date filter"
+              >
+                <X className="h-2.5 w-2.5" />
+              </button>
+            </span>
+          )}
         </div>
         <span className="text-[11px] text-slate-500">Tap card to edit</span>
       </div>
@@ -197,6 +227,15 @@ export function MobileLeadListView({
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-blue-50 text-blue-800 border border-blue-200 flex items-center gap-1">
                             <Calendar className="h-2.5 w-2.5 text-blue-600" />
                             <span>{latestDate}</span>
+                          </span>
+                        )}
+                        {row.createdAt && (
+                          <span
+                            className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200 flex items-center gap-1"
+                            title={`Lead added on ${new Date(row.createdAt).toLocaleString("en-IN")}`}
+                          >
+                            <Calendar className="h-2.5 w-2.5 text-slate-400" />
+                            <span>Added: {new Date(row.createdAt).toLocaleDateString("en-IN", { month: "short", day: "numeric" })}</span>
                           </span>
                         )}
                       </div>

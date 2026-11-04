@@ -49,6 +49,7 @@ interface TopToolbarProps {
   canUndo?: boolean;
   canRedo?: boolean;
   totalLeads?: number;
+  dateFilter?: string | null;
   onRefresh?: () => void;
   isRefreshing?: boolean;
 }
@@ -70,6 +71,7 @@ export function TopToolbar({
   canUndo = false,
   canRedo = false,
   totalLeads,
+  dateFilter = null,
   onRefresh,
   isRefreshing = false,
 }: TopToolbarProps) {
@@ -153,8 +155,13 @@ export function TopToolbar({
                 {sheet?.name ? `Sheet: ${sheet.name}` : "Loading..."}
               </span>
               {totalLeads !== undefined && (
-                <span className="text-[10px] sm:text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-950 font-bold border border-amber-300 whitespace-nowrap shadow-2xs">
-                  {totalLeads} {totalLeads === 1 ? "Lead" : "Leads"}
+                <span className="text-[10px] sm:text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-950 font-bold border border-amber-300 whitespace-nowrap shadow-2xs flex items-center gap-1">
+                  <span>{totalLeads} {totalLeads === 1 ? "Lead" : "Leads"}</span>
+                  {dateFilter && (
+                    <span className="text-[9px] px-1 py-0.2 bg-amber-300 text-amber-950 font-black rounded">
+                      Filtered
+                    </span>
+                  )}
                 </span>
               )}
               {sheet?.user && (
