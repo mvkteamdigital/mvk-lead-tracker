@@ -39,6 +39,7 @@ export function StatusFilterBar({
   onOpenDropdownModal,
 }: StatusFilterBarProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const mobileDateInputRef = useRef<HTMLInputElement>(null);
 
   const scroll = (direction: "left" | "right") => {
     if (scrollRef.current) {
@@ -57,25 +58,24 @@ export function StatusFilterBar({
   return (
     <div className="bg-white border-b border-slate-200 px-3 sm:px-4 py-2 flex items-center gap-2 select-none shadow-2xs shrink-0 z-20 overflow-x-auto no-scrollbar">
       
-      {/* 1. Date Added Filter Input (Responsive for Mobile & Desktop) */}
+      {/* 1. Date Added Filter Input (Desktop: Full text-based date picker) */}
       <div
-        className={`flex items-center gap-1.5 shrink-0 rounded-xl px-2.5 py-1 text-xs border transition-all ${
+        className={`hidden md:flex items-center gap-1.5 shrink-0 rounded-xl px-2.5 py-1 text-xs border transition-all ${
           dateFilter
             ? "bg-amber-50 border-amber-300 ring-2 ring-amber-400/40 text-amber-950 font-bold shadow-2xs"
             : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700"
         }`}
       >
         <Calendar className={`h-3.5 w-3.5 ${dateFilter ? "text-amber-600" : "text-slate-400"} shrink-0`} />
-        <label htmlFor="filter-date-added" className="text-[11px] font-bold text-slate-700 whitespace-nowrap cursor-pointer">
-          <span className="hidden sm:inline">Date Added:</span>
-          <span className="sm:hidden">Date:</span>
+        <label htmlFor="filter-date-added-desktop" className="text-[11px] font-bold text-slate-700 whitespace-nowrap cursor-pointer">
+          Date Added:
         </label>
         <input
-          id="filter-date-added"
+          id="filter-date-added-desktop"
           type="date"
           value={dateFilter || ""}
           onChange={(e) => onSelectDate?.(e.target.value || null)}
-          className="text-xs bg-transparent border-0 outline-none text-slate-800 font-semibold cursor-pointer p-0 w-[115px] sm:w-[125px]"
+          className="text-xs bg-transparent border-0 outline-none text-slate-800 font-semibold cursor-pointer p-0 w-[125px]"
           title="Filter leads by exact date added"
         />
         {dateFilter ? (
@@ -99,6 +99,54 @@ export function StatusFilterBar({
             title="Filter to leads added today"
           >
             Today
+          </button>
+        )}
+      </div>
+
+      {/* Mobile: Compact Calendar Icon Button (frees up horizontal space for status filter chips) */}
+      <div className="relative md:hidden shrink-0 flex items-center gap-1">
+        <div className="relative flex items-center">
+          <button
+            type="button"
+            onClick={() => {
+              try {
+                mobileDateInputRef.current?.showPicker();
+              } catch {
+                mobileDateInputRef.current?.focus();
+              }
+            }}
+            className={`p-1.5 rounded-xl border flex items-center justify-center transition-all ${
+              dateFilter
+                ? "bg-amber-100 border-amber-400 text-amber-900 ring-2 ring-amber-400/50 shadow-xs"
+                : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600 active:bg-slate-200"
+            }`}
+            title={dateFilter ? `Filtered on ${formatDateDisplay(dateFilter)} (tap to change)` : "Filter by date added"}
+            aria-label="Filter by date added"
+          >
+            <Calendar className={`h-4 w-4 ${dateFilter ? "text-amber-700" : "text-slate-600"}`} />
+            {dateFilter && (
+              <span className="absolute -top-0.5 -right-0.5 h-2 w-2 bg-amber-500 rounded-full ring-2 ring-white" />
+            )}
+          </button>
+          {/* Transparent full-size native date input overlay for reliable mobile tap across iOS and Android */}
+          <input
+            ref={mobileDateInputRef}
+            type="date"
+            value={dateFilter || ""}
+            onChange={(e) => onSelectDate?.(e.target.value || null)}
+            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+            aria-label="Select date filter"
+          />
+        </div>
+        {dateFilter && (
+          <button
+            type="button"
+            onClick={() => onSelectDate?.(null)}
+            className="p-1 bg-amber-100 hover:bg-rose-100 text-amber-800 hover:text-rose-700 rounded-lg border border-amber-300 transition-colors"
+            title="Clear date filter"
+            aria-label="Clear date filter"
+          >
+            <X className="h-3 w-3" />
           </button>
         )}
       </div>

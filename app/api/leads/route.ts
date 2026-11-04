@@ -93,8 +93,30 @@ export async function GET(req: Request) {
     return NextResponse.json({ exists: false });
   }
 
-  // If no phone check query, return accessible leads
-  return NextResponse.json({ message: "Leads API endpoint active" });
+  // If no phone check query, return accessible leads sorted by recent first
+  const leads = await prisma.row.findMany({
+    where: user.role === "ADMIN" ? {} : { sheet: { userId: user.id } },
+    orderBy: { createdAt: "desc" },
+    include: {
+      sheet: {
+        select: { id: true, name: true, userId: true },
+      },
+    },
+  });
+
+  return NextResponse.json({
+    leads: leads.map((r) => ({
+      id: r.id,
+      sheetId: r.sheetId,
+      order: r.order,
+      phoneNumber: r.phoneNumber,
+      data: JSON.parse(r.data || "{}"),
+      styles: JSON.parse(r.styles || "{}"),
+      createdAt: r.createdAt.toISOString(),
+      updatedAt: r.updatedAt.toISOString(),
+      sheetName: r.sheet.name,
+    })),
+  });
 }
 
 // POST /api/leads - Create new lead with global duplicate phone validation

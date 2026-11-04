@@ -359,9 +359,7 @@ export function SpreadsheetApp() {
   // Get active cell value
   const getActiveCellValue = (): string => {
     if (!activeSheet || !activeCell) return "";
-    const row = activeSheet.rows.find(
-      (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
-    );
+    const row = activeSheet.rows[activeCell.rowIdx];
     if (!row) return "";
     return row.data[activeCell.colId] || "";
   };
@@ -369,9 +367,7 @@ export function SpreadsheetApp() {
   // Get active cell style
   const getActiveCellStyle = (): CellStyle => {
     if (!activeSheet || !activeCell) return {};
-    const row = activeSheet.rows.find(
-      (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
-    );
+    const row = activeSheet.rows[activeCell.rowIdx];
     if (!row || !row.styles) return {};
     return row.styles[activeCell.colId] || {};
   };
@@ -387,7 +383,7 @@ export function SpreadsheetApp() {
     // Optimistically update local state immediately for zero-lag UI
     setActiveSheet((prev) => {
       if (!prev) return prev;
-      const existing = prev.rows.find((r) => r.id === rowId || (order !== undefined && r.order === order));
+      const existing = prev.rows.find((r) => r.id === rowId);
       if (existing) {
         return {
           ...prev,
@@ -402,10 +398,11 @@ export function SpreadsheetApp() {
         order: rowOrder,
         data: { [columnId]: value },
         styles: {},
+        createdAt: new Date().toISOString(),
       };
       return {
         ...prev,
-        rows: [...prev.rows, newRow],
+        rows: [newRow, ...prev.rows],
       };
     });
 
@@ -857,9 +854,7 @@ export function SpreadsheetApp() {
           cellValue={getActiveCellValue()}
           onCellValueChange={(val) => {
             if (activeSheet && activeCell) {
-              const row = activeSheet.rows.find(
-                (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
-              );
+              const row = activeSheet.rows[activeCell.rowIdx];
               handleUpdateCell(
                 row ? row.id : `temp_${activeCell.rowIdx}`,
                 activeCell.colId,
