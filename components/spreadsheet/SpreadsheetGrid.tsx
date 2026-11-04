@@ -43,6 +43,351 @@ interface SpreadsheetGridProps {
 const ROW_HEIGHT = 36;
 const BUFFER = 25;
 
+// ==========================================
+// 1. MEMOIZED GRID CELL (0ms Click & Render)
+// ==========================================
+interface GridCellProps {
+  rowId: string;
+  rowIdx: number;
+  colIdx: number;
+  col: ColumnDef;
+  value: string;
+  cellStyle?: CellStyle;
+  isActive: boolean;
+  isSelected: boolean;
+  isEditing: boolean;
+  isMultiCell: boolean;
+  isTopEdge: boolean;
+  isBottomEdge: boolean;
+  isLeftEdge: boolean;
+  isRightEdge: boolean;
+  isBottomRightCorner: boolean;
+  editValue?: string;
+  onEditValueChange?: (val: string) => void;
+  onCommitEdit?: () => void;
+  editInputRef?: React.RefObject<HTMLInputElement>;
+  onCellMouseDown: (e: React.MouseEvent, rowIdx: number, colIdx: number, col: ColumnDef) => void;
+  onCellMouseEnter: (rowIdx: number, colIdx: number) => void;
+  onCellDoubleClick: (rowIdx: number, col: ColumnDef) => void;
+  onCellContextMenu: (e: React.MouseEvent, rowIdx: number, colIdx: number, col: ColumnDef) => void;
+  onDropdownClick: (e: React.MouseEvent, rowIdx: number, colIdx: number, col: ColumnDef) => void;
+  onStartEditing: (rowIdx: number, col: ColumnDef) => void;
+}
+
+const GridCell = ({
+  rowId,
+  rowIdx,
+  colIdx,
+  col,
+  value,
+  cellStyle,
+  isActive,
+  isSelected,
+  isEditing,
+  isMultiCell,
+  isTopEdge,
+  isBottomEdge,
+  isLeftEdge,
+  isRightEdge,
+  isBottomRightCorner,
+  editValue = "",
+  onEditValueChange,
+  onCommitEdit,
+  editInputRef,
+  onCellMouseDown,
+  onCellMouseEnter,
+  onCellDoubleClick,
+  onCellContextMenu,
+  onDropdownClick,
+  onStartEditing,
+}: GridCellProps) => {
+  const inlineStyle: React.CSSProperties = {
+    fontWeight: cellStyle?.bold ? "bold" : "normal",
+    fontStyle: cellStyle?.italic ? "italic" : "normal",
+    color: cellStyle?.color || "#111827",
+    backgroundColor: cellStyle?.bgColor || undefined,
+    textAlign: cellStyle?.align || "left",
+  };
+
+  if (isMultiCell && isSelected) {
+    if (!isActive) {
+      inlineStyle.backgroundColor = "#dbeafe";
+    } else {
+      inlineStyle.backgroundColor = "#eff6ff";
+    }
+
+    const shadows: string[] = [];
+    if (isTopEdge) shadows.push("inset 0 2px 0 0 #2563eb");
+    if (isBottomEdge) shadows.push("inset 0 -2px 0 0 #2563eb");
+    if (isLeftEdge) shadows.push("inset 2px 0 0 0 #2563eb");
+    if (isRightEdge) shadows.push("inset -2px 0 0 0 #2563eb");
+    if (shadows.length > 0) {
+      inlineStyle.boxShadow = shadows.join(", ");
+    }
+  }
+
+  const isPerimeter = isTopEdge || isBottomEdge || isLeftEdge || isRightEdge;
+
+  return (
+    <td
+      onMouseDown={(e) => onCellMouseDown(e, rowIdx, colIdx, col)}
+      onMouseEnter={() => onCellMouseEnter(rowIdx, colIdx)}
+      onDoubleClick={() => onCellDoubleClick(rowIdx, col)}
+      onContextMenu={(e) => onCellContextMenu(e, rowIdx, colIdx, col)}
+      style={inlineStyle}
+      className={`relative border-r border-b border-slate-300 px-3 py-1.5 transition-colors text-xs text-gray-900 font-normal overflow-hidden cursor-cell select-none ${
+        !isMultiCell && isActive
+          ? "outline outline-2 outline-blue-600 -outline-offset-2 z-10 bg-blue-50/40"
+          : isPerimeter
+          ? "z-10"
+          : isSelected
+          ? "z-5"
+          : ""
+      }`}
+    >
+      {/* Active Cell Drag Handle on bottom-right corner */}
+      {((!isMultiCell && isActive) || (isMultiCell && isBottomRightCorner)) && (
+        <div className="absolute -bottom-1 -right-1 w-1.5 h-1.5 bg-blue-600 border border-white z-20 pointer-events-none shadow-xs" />
+      )}
+
+      {/* Inner outline for active cell inside multi-cell selection */}
+      {isMultiCell && isActive && (
+        <div className="absolute inset-0 outline outline-1 outline-blue-400 -outline-offset-1 pointer-events-none z-10" />
+      )}
+
+      {isEditing ? (
+        <input
+          ref={editInputRef}
+          type={col.type === "date" ? "date" : col.type === "number" ? "number" : "text"}
+          value={editValue}
+          onChange={(e) => onEditValueChange?.(e.target.value)}
+          onBlur={onCommitEdit}
+          className="absolute inset-0 w-full h-full px-2 text-xs bg-white text-gray-900 font-medium border-2 border-blue-600 outline-none z-20 select-text"
+        />
+      ) : col.type === "dropdown" ? (
+        <div
+          onClick={(e) => onDropdownClick(e, rowIdx, colIdx, col)}
+          className="flex items-center justify-between w-full cursor-pointer group/pill select-none"
+        >
+          {value ? (
+            <span
+              className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium border flex items-center gap-1.5 truncate shadow-2xs select-none ${
+                (col.id === "col_lead_source" ? SOURCE_COLORS[value] : STATUS_COLORS[value])?.bg || "bg-slate-100"
+              } ${
+                (col.id === "col_lead_source" ? SOURCE_COLORS[value] : STATUS_COLORS[value])?.text || "text-slate-900"
+              } ${
+                (col.id === "col_lead_source" ? SOURCE_COLORS[value] : STATUS_COLORS[value])?.border || "border-slate-300"
+              }`}
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+              <span className="truncate">{value}</span>
+            </span>
+          ) : (
+            <span className="text-slate-400 italic text-[11px] select-none">
+              {col.id === "col_lead_source" ? "Select source..." : "Select status..."}
+            </span>
+          )}
+          <ChevronDown className="h-3 w-3 text-slate-500 group-hover/pill:text-slate-900 transition-colors shrink-0 ml-1" />
+        </div>
+      ) : col.type === "date" ? (
+        <div
+          onClick={() => onStartEditing(rowIdx, col)}
+          className="flex items-center justify-between w-full cursor-pointer group/date select-none text-xs"
+        >
+          {value ? (
+            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-50/80 text-blue-900 font-medium border border-blue-200/80 text-[11px] truncate shadow-2xs">
+              <Calendar className="h-3 w-3 text-blue-600 shrink-0" />
+              <span className="truncate">{value}</span>
+            </span>
+          ) : (
+            <span className="text-slate-400 italic text-[11px] flex items-center gap-1 opacity-70 group-hover/date:opacity-100 transition-opacity">
+              <Calendar className="h-3 w-3 text-slate-400 shrink-0" />
+              <span>Pick date...</span>
+            </span>
+          )}
+        </div>
+      ) : (
+        <span
+          className="block w-full truncate select-none text-gray-900"
+          title={value || undefined}
+        >
+          {value ? value : <span className="opacity-0 select-none">-</span>}
+        </span>
+      )}
+    </td>
+  );
+};
+
+const MemoizedGridCell = React.memo(GridCell);
+
+// ==========================================
+// 2. MEMOIZED GRID ROW (Skips Untouched Rows)
+// ==========================================
+interface GridRowProps {
+  rowIdx: number;
+  row: RowData;
+  columns: ColumnDef[];
+  isRowSelected: boolean;
+  activeCell: { rowIdx: number; colId: string; colName: string } | null;
+  selectionRange: { startRow: number; endRow: number; startCol: number; endCol: number } | null;
+  isMultiCell: boolean;
+  editingCell: { rowId: string; colId: string; rowIdx: number } | null;
+  editValue: string;
+  onEditValueChange: (val: string) => void;
+  onCommitEdit: () => void;
+  editInputRef: React.RefObject<HTMLInputElement>;
+  onRowHeaderClick: (e: React.MouseEvent, rowIdx: number) => void;
+  onRowContextMenu: (e: React.MouseEvent, rowId: string, rowIdx: number) => void;
+  onCellMouseDown: (e: React.MouseEvent, rowIdx: number, colIdx: number, col: ColumnDef) => void;
+  onCellMouseEnter: (rowIdx: number, colIdx: number) => void;
+  onCellDoubleClick: (rowIdx: number, col: ColumnDef) => void;
+  onCellContextMenu: (e: React.MouseEvent, rowIdx: number, colIdx: number, col: ColumnDef) => void;
+  onDropdownClick: (e: React.MouseEvent, rowIdx: number, colIdx: number, col: ColumnDef) => void;
+  onStartEditing: (rowIdx: number, col: ColumnDef) => void;
+}
+
+const GridRow = ({
+  rowIdx,
+  row,
+  columns,
+  isRowSelected,
+  activeCell,
+  selectionRange,
+  isMultiCell,
+  editingCell,
+  editValue,
+  onEditValueChange,
+  onCommitEdit,
+  editInputRef,
+  onRowHeaderClick,
+  onRowContextMenu,
+  onCellMouseDown,
+  onCellMouseEnter,
+  onCellDoubleClick,
+  onCellContextMenu,
+  onDropdownClick,
+  onStartEditing,
+}: GridRowProps) => {
+  const rowInSelectionRange =
+    selectionRange !== null &&
+    rowIdx >= selectionRange.startRow &&
+    rowIdx <= selectionRange.endRow;
+
+  return (
+    <tr
+      className={`h-9 border-b border-slate-300 transition-colors ${
+        isRowSelected ? "bg-blue-50/20" : "hover:bg-slate-50/70"
+      }`}
+    >
+      {/* Sticky Row Number (1 to 1000+) */}
+      <td
+        className={`sticky left-0 z-10 text-center text-[11px] font-mono select-none cursor-pointer border-r border-b border-slate-300 transition-colors ${
+          isRowSelected
+            ? "bg-blue-100 font-bold text-blue-900 border-r-2 border-r-blue-600"
+            : "bg-slate-100 hover:bg-slate-200 text-slate-500"
+        }`}
+        onClick={(e) => onRowHeaderClick(e, rowIdx)}
+        onContextMenu={(e) => onRowContextMenu(e, row.id, rowIdx)}
+      >
+        {rowIdx + 1}
+      </td>
+
+      {/* Cells */}
+      {columns.map((col, colIdx) => {
+        const cellVal = row.data?.[col.id] || "";
+        const isActive = activeCell?.rowIdx === rowIdx && activeCell?.colId === col.id;
+        const isEditing = editingCell?.rowIdx === rowIdx && editingCell?.colId === col.id;
+        const cellStyle = row.styles?.[col.id];
+
+        const isSelected =
+          rowInSelectionRange &&
+          colIdx >= selectionRange.startCol &&
+          colIdx <= selectionRange.endCol;
+
+        const isTopEdge = isSelected && rowIdx === selectionRange.startRow;
+        const isBottomEdge = isSelected && rowIdx === selectionRange.endRow;
+        const isLeftEdge = isSelected && colIdx === selectionRange.startCol;
+        const isRightEdge = isSelected && colIdx === selectionRange.endCol;
+        const isBottomRightCorner = isBottomEdge && isRightEdge;
+
+        return (
+          <MemoizedGridCell
+            key={col.id}
+            rowId={row.id}
+            rowIdx={rowIdx}
+            colIdx={colIdx}
+            col={col}
+            value={cellVal}
+            cellStyle={cellStyle}
+            isActive={isActive}
+            isSelected={isSelected}
+            isEditing={isEditing}
+            isMultiCell={isMultiCell}
+            isTopEdge={isTopEdge}
+            isBottomEdge={isBottomEdge}
+            isLeftEdge={isLeftEdge}
+            isRightEdge={isRightEdge}
+            isBottomRightCorner={isBottomRightCorner}
+            editValue={isEditing ? editValue : undefined}
+            onEditValueChange={isEditing ? onEditValueChange : undefined}
+            onCommitEdit={isEditing ? onCommitEdit : undefined}
+            editInputRef={isEditing ? editInputRef : undefined}
+            onCellMouseDown={onCellMouseDown}
+            onCellMouseEnter={onCellMouseEnter}
+            onCellDoubleClick={onCellDoubleClick}
+            onCellContextMenu={onCellContextMenu}
+            onDropdownClick={onDropdownClick}
+            onStartEditing={onStartEditing}
+          />
+        );
+      })}
+    </tr>
+  );
+};
+
+const MemoizedGridRow = React.memo(GridRow, (prev, next) => {
+  if (prev.row !== next.row) return false;
+  if (prev.columns !== next.columns) return false;
+  if (prev.isRowSelected !== next.isRowSelected) return false;
+
+  // Active cell entered or left this row?
+  const prevHasActive = prev.activeCell?.rowIdx === prev.rowIdx;
+  const nextHasActive = next.activeCell?.rowIdx === next.rowIdx;
+  if (prevHasActive !== nextHasActive) return false;
+  if (nextHasActive && prev.activeCell?.colId !== next.activeCell?.colId) return false;
+
+  // Editing entered or left this row?
+  const prevIsEditing = prev.editingCell?.rowIdx === prev.rowIdx;
+  const nextIsEditing = next.editingCell?.rowIdx === next.rowIdx;
+  if (prevIsEditing !== nextIsEditing) return false;
+  if (nextIsEditing && prev.editValue !== next.editValue) return false;
+
+  // Selection range entered or left this row?
+  const prevInSelection =
+    prev.selectionRange !== null &&
+    prev.rowIdx >= prev.selectionRange.startRow &&
+    prev.rowIdx <= prev.selectionRange.endRow;
+  const nextInSelection =
+    next.selectionRange !== null &&
+    next.rowIdx >= next.selectionRange.startRow &&
+    next.rowIdx <= next.selectionRange.endRow;
+  if (prevInSelection !== nextInSelection) return false;
+
+  // If in selection, did selection columns or rows change?
+  if (nextInSelection) {
+    if (
+      prev.selectionRange?.startCol !== next.selectionRange?.startCol ||
+      prev.selectionRange?.endCol !== next.selectionRange?.endCol ||
+      prev.selectionRange?.startRow !== next.selectionRange?.startRow ||
+      prev.selectionRange?.endRow !== next.selectionRange?.endRow
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+});
+
 export function SpreadsheetGrid({
   sheet,
   onUpdateCell,
@@ -79,6 +424,23 @@ export function SpreadsheetGrid({
   const [selectionAnchor, setSelectionAnchor] = useState<{ rowIdx: number; colIdx: number } | null>(null);
   const [selectionFocus, setSelectionFocus] = useState<{ rowIdx: number; colIdx: number } | null>(null);
   const [isMouseDown, setIsMouseDown] = useState(false);
+  const [isDraggingCol, setIsDraggingCol] = useState(false);
+
+  // Stable refs to prevent callback re-creation on mouse down/drag
+  const isMouseDownRef = useRef(isMouseDown);
+  useEffect(() => {
+    isMouseDownRef.current = isMouseDown;
+  }, [isMouseDown]);
+
+  const selectionAnchorRef = useRef(selectionAnchor);
+  useEffect(() => {
+    selectionAnchorRef.current = selectionAnchor;
+  }, [selectionAnchor]);
+
+  const editingCellRef = useRef(editingCell);
+  useEffect(() => {
+    editingCellRef.current = editingCell;
+  }, [editingCell]);
 
   // Dropdown popover state
   const [openDropdown, setOpenDropdown] = useState<{
@@ -294,84 +656,10 @@ export function SpreadsheetGrid({
     );
   }, [selectionRange]);
 
-  // Handle cell mouse down (click, Shift-click, or start of click-and-drag)
-  const handleCellMouseDown = (
-    e: React.MouseEvent,
-    rowIdx: number,
-    colIdx: number,
-    col: ColumnDef
-  ) => {
-    if (e.button !== 0) return; // Only primary left-click
-
-    // If another cell was being edited, commit it
-    if (editingCell && (editingCell.rowIdx !== rowIdx || editingCell.colId !== col.id)) {
-      commitEdit();
-    }
-
-    // Prevent native browser text selection bleed while allowing focus
-    if (!editingCell || editingCell.rowIdx !== rowIdx || editingCell.colId !== col.id) {
-      e.preventDefault();
-    }
-
-    if (gridContainerRef.current) {
-      gridContainerRef.current.focus();
-    }
-
-    if (e.shiftKey && selectionAnchor) {
-      setSelectionFocus({ rowIdx, colIdx });
-    } else {
-      setActiveCell({ rowIdx, colId: col.id, colName: col.name });
-      setSelectionAnchor({ rowIdx, colIdx });
-      setSelectionFocus({ rowIdx, colIdx });
-      setIsMouseDown(true);
-    }
-    setOpenDropdown(null);
-  };
-
-  // Handle cell mouse enter during drag
-  const handleCellMouseEnter = (rowIdx: number, colIdx: number) => {
-    if (isMouseDown && selectionAnchor) {
-      setSelectionFocus({ rowIdx, colIdx });
-    }
-  };
-
-  // Row header click (selects the entire row across all columns, like Google Sheets)
-  const handleRowHeaderClick = (e: React.MouseEvent, rowIdx: number) => {
-    e.preventDefault();
-    if (editingCell) {
-      commitEdit();
-    }
-    if (gridContainerRef.current) {
-      gridContainerRef.current.focus();
-    }
-
-    const firstCol = sheet.columns[0];
-    if (!firstCol) return;
-    setActiveCell({
-      rowIdx,
-      colId: firstCol.id,
-      colName: firstCol.name,
-    });
-    if (e.shiftKey && selectionAnchor) {
-      setSelectionFocus({ rowIdx, colIdx: sheet.columns.length - 1 });
-    } else {
-      setSelectionAnchor({ rowIdx, colIdx: 0 });
-      setSelectionFocus({ rowIdx, colIdx: sheet.columns.length - 1 });
-    }
-  };
-
-  // Start in-cell edit
-  const startEditing = (rowIdx: number, col: ColumnDef) => {
-    if (col.type === "dropdown") return;
-    const row = getRowAtIndex(rowIdx);
-    setEditingCell({ rowId: row.id, colId: col.id, rowIdx });
-    setEditValue(row.data[col.id] || "");
-  };
-
   // Commit in-cell edit with optional directional movement
-  const commitEdit = async (moveDirection?: "down" | "up" | "right" | "left") => {
-    if (!editingCell) return;
-    const { rowId, colId, rowIdx } = editingCell;
+  const commitEdit = useCallback(async (moveDirection?: "down" | "up" | "right" | "left") => {
+    if (!editingCellRef.current) return;
+    const { rowId, colId, rowIdx } = editingCellRef.current;
     const valueToSave = editValue;
     setEditingCell(null);
     await onUpdateCell(rowId, colId, valueToSave, rowIdx);
@@ -403,10 +691,135 @@ export function SpreadsheetGrid({
         setSelectionFocus({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx - 1 });
       }
     }
-  };
+  }, [editValue, onUpdateCell, activeCell, sheet.columns, totalRowCount, setActiveCell]);
+
+  // Start in-cell edit
+  const startEditing = useCallback((rowIdx: number, col: ColumnDef) => {
+    if (col.type === "dropdown") return;
+    const row = getRowAtIndex(rowIdx);
+    setEditingCell({ rowId: row.id, colId: col.id, rowIdx });
+    setEditValue(row.data[col.id] || "");
+  }, [getRowAtIndex]);
+
+  // Handle cell double click
+  const handleCellDoubleClick = useCallback((rowIdx: number, col: ColumnDef) => {
+    startEditing(rowIdx, col);
+  }, [startEditing]);
+
+  // Handle cell mouse down (click, Shift-click, or start of click-and-drag)
+  const handleCellMouseDown = useCallback((
+    e: React.MouseEvent,
+    rowIdx: number,
+    colIdx: number,
+    col: ColumnDef
+  ) => {
+    if (e.button !== 0) return; // Only primary left-click
+
+    if (editingCellRef.current && (editingCellRef.current.rowIdx !== rowIdx || editingCellRef.current.colId !== col.id)) {
+      commitEdit();
+    }
+
+    if (!editingCellRef.current || editingCellRef.current.rowIdx !== rowIdx || editingCellRef.current.colId !== col.id) {
+      e.preventDefault();
+    }
+
+    if (gridContainerRef.current) {
+      gridContainerRef.current.focus();
+    }
+
+    if (e.shiftKey && selectionAnchorRef.current) {
+      setSelectionFocus({ rowIdx, colIdx });
+    } else {
+      setActiveCell({ rowIdx, colId: col.id, colName: col.name });
+      setSelectionAnchor({ rowIdx, colIdx });
+      setSelectionFocus({ rowIdx, colIdx });
+      setIsMouseDown(true);
+    }
+    setOpenDropdown(null);
+  }, [commitEdit, setActiveCell]);
+
+  // Handle cell mouse enter during drag
+  const handleCellMouseEnter = useCallback((rowIdx: number, colIdx: number) => {
+    if (isMouseDownRef.current && selectionAnchorRef.current) {
+      setSelectionFocus({ rowIdx, colIdx });
+    }
+  }, []);
+
+  // Row header click (selects the entire row across all columns, like Google Sheets)
+  const handleRowHeaderClick = useCallback((e: React.MouseEvent, rowIdx: number) => {
+    e.preventDefault();
+    if (editingCellRef.current) {
+      commitEdit();
+    }
+    if (gridContainerRef.current) {
+      gridContainerRef.current.focus();
+    }
+
+    const firstCol = sheet.columns[0];
+    if (!firstCol) return;
+    setActiveCell({
+      rowIdx,
+      colId: firstCol.id,
+      colName: firstCol.name,
+    });
+    if (e.shiftKey && selectionAnchorRef.current) {
+      setSelectionFocus({ rowIdx, colIdx: sheet.columns.length - 1 });
+    } else {
+      setSelectionAnchor({ rowIdx, colIdx: 0 });
+      setSelectionFocus({ rowIdx, colIdx: sheet.columns.length - 1 });
+    }
+  }, [commitEdit, sheet.columns, setActiveCell]);
+
+  // Column header click (selects the entire column across all rows, like Google Sheets)
+  const handleColumnHeaderClick = useCallback(
+    (e: React.MouseEvent, colIdx: number, col: ColumnDef) => {
+      if (resizingCol || renamingColId !== null || isDraggingCol) return;
+
+      if (editingCellRef.current) {
+        commitEdit();
+      }
+      if (gridContainerRef.current) {
+        gridContainerRef.current.focus();
+      }
+
+      const firstRowIdx = 0;
+      const lastRowIdx = totalRowCount - 1;
+
+      setActiveCell({
+        rowIdx: firstRowIdx,
+        colId: col.id,
+        colName: col.name,
+      });
+
+      if (e.shiftKey && selectionAnchorRef.current) {
+        setSelectionAnchor({ rowIdx: firstRowIdx, colIdx: selectionAnchorRef.current.colIdx });
+        setSelectionFocus({ rowIdx: lastRowIdx, colIdx });
+      } else {
+        setSelectionAnchor({ rowIdx: firstRowIdx, colIdx });
+        setSelectionFocus({ rowIdx: lastRowIdx, colIdx });
+      }
+    },
+    [resizingCol, renamingColId, isDraggingCol, commitEdit, totalRowCount, setActiveCell]
+  );
+
+  // Select all cells in sheet when top-left # corner is clicked
+  const handleSelectAllSheet = useCallback(() => {
+    if (sheet.columns.length === 0) return;
+    const firstCol = sheet.columns[0];
+    const lastRowIdx = totalRowCount - 1;
+
+    setActiveCell({
+      rowIdx: 0,
+      colId: firstCol.id,
+      colName: firstCol.name,
+    });
+
+    setSelectionAnchor({ rowIdx: 0, colIdx: 0 });
+    setSelectionFocus({ rowIdx: lastRowIdx, colIdx: sheet.columns.length - 1 });
+  }, [sheet.columns, totalRowCount, setActiveCell]);
 
   // Open dropdown popover
-  const handleDropdownClick = (
+  const handleDropdownClick = useCallback((
     e: React.MouseEvent,
     rowIdx: number,
     colIdx: number,
@@ -426,7 +839,22 @@ export function SpreadsheetGrid({
       left: rect.left,
       options: col.options || [],
     });
-  };
+  }, [getRowAtIndex, setActiveCell]);
+
+  // Row context menu
+  const handleRowContextMenu = useCallback(
+    (e: React.MouseEvent, rowId: string, rowIdx: number) => {
+      e.preventDefault();
+      setContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        rowId,
+        colId: sheet.columns[0]?.id || "",
+        rowIdx,
+      });
+    },
+    [sheet.columns]
+  );
 
   // Select dropdown option
   const handleSelectDropdownOption = async (option: string) => {
@@ -477,6 +905,7 @@ export function SpreadsheetGrid({
       e.preventDefault();
       return;
     }
+    setIsDraggingCol(true);
     setDraggedColIdx(colIdx);
     e.dataTransfer.setData("text/plain", String(colIdx));
     e.dataTransfer.effectAllowed = "move";
@@ -500,11 +929,13 @@ export function SpreadsheetGrid({
     }
     setDraggedColIdx(null);
     setDragOverColIdx(null);
+    setTimeout(() => setIsDraggingCol(false), 100);
   };
 
   const handleColDragEnd = () => {
     setDraggedColIdx(null);
     setDragOverColIdx(null);
+    setTimeout(() => setIsDraggingCol(false), 100);
   };
 
   // Keyboard Navigation with Google Sheets Range Selection & Standard Spreadsheet Controls
@@ -1037,8 +1468,12 @@ export function SpreadsheetGrid({
           {/* Sticky Table Header */}
           <thead className="sticky top-0 z-20 shadow-xs">
             <tr className="h-10 select-none">
-              {/* Row number top-left corner */}
-              <th className="sticky left-0 z-30 bg-slate-200 border-b-2 border-r border-slate-300 text-slate-500 font-semibold text-center text-[11px] p-0 w-[56px]">
+              {/* Row number top-left corner (Click to select all cells in sheet) */}
+              <th
+                onClick={handleSelectAllSheet}
+                className="sticky left-0 z-30 bg-slate-200 hover:bg-slate-300 border-b-2 border-r border-slate-300 text-slate-600 font-bold text-center text-[11px] p-0 w-[56px] cursor-pointer transition-colors select-none"
+                title="Click to select all cells in sheet"
+              >
                 #
               </th>
 
@@ -1051,10 +1486,16 @@ export function SpreadsheetGrid({
                   ? "bg-slate-900 text-amber-300 font-bold border-slate-950"
                   : "bg-amber-300 text-slate-950 font-bold border-amber-400";
 
+                const maxRowForCol = isFiltered && filteredRowIndices.length > 0
+                  ? Math.max(...filteredRowIndices)
+                  : totalRowCount - 1;
+
                 const isColSelected =
                   selectionRange !== null &&
                   colIdx >= selectionRange.startCol &&
-                  colIdx <= selectionRange.endCol;
+                  colIdx <= selectionRange.endCol &&
+                  selectionRange.startRow === 0 &&
+                  selectionRange.endRow >= Math.min(maxRowForCol, totalRowCount - 1);
 
                 const isBeingDragged = draggedColIdx === colIdx;
                 const isDropTarget = dragOverColIdx === colIdx && draggedColIdx !== colIdx;
@@ -1067,13 +1508,14 @@ export function SpreadsheetGrid({
                     onDragOver={(e) => handleColDragOver(e, colIdx)}
                     onDrop={(e) => handleColDrop(e, colIdx)}
                     onDragEnd={handleColDragEnd}
+                    onClick={(e) => handleColumnHeaderClick(e, colIdx, col)}
                     onDoubleClick={() => handleStartRenameColumn(col)}
-                    className={`relative border-b-2 border-r border-slate-400/40 px-2.5 py-2 text-left font-semibold text-xs tracking-wide select-none group transition-all cursor-grab active:cursor-grabbing ${headerBg} ${
-                      isColSelected ? "ring-2 ring-blue-500 ring-inset" : ""
+                    className={`relative border-b-2 border-r border-slate-400/40 px-2.5 py-2 text-left font-semibold text-xs tracking-wide select-none group transition-all cursor-pointer ${headerBg} ${
+                      isColSelected ? "ring-2 ring-blue-600 bg-blue-100 text-blue-950 font-black shadow-inner" : "hover:brightness-95"
                     } ${isBeingDragged ? "opacity-30 scale-95 shadow-inner" : ""} ${
                       isDropTarget ? "border-l-4 border-l-blue-600 bg-blue-100 text-blue-950 ring-2 ring-blue-400" : ""
                     }`}
-                    title="Drag to reorder column side-to-side, double click to rename"
+                    title="Click to select entire column, drag to reorder, double-click to rename"
                   >
                     {renamingColId === col.id ? (
                       <div
@@ -1190,179 +1632,34 @@ export function SpreadsheetGrid({
               const isRowSelected =
                 selectionRange !== null &&
                 rowIdx >= selectionRange.startRow &&
-                rowIdx <= selectionRange.endRow;
+                rowIdx <= selectionRange.endRow &&
+                selectionRange.startCol === 0 &&
+                selectionRange.endCol >= (sheet.columns.length - 1);
 
               return (
-                <tr
+                <MemoizedGridRow
                   key={rowIdx}
-                  className={`h-9 border-b border-slate-300 transition-colors ${
-                    isRowSelected ? "bg-blue-50/20" : "hover:bg-slate-50/70"
-                  }`}
-                >
-                  {/* Sticky Row Number (1 to 1000+) */}
-                  <td
-                    className={`sticky left-0 z-10 text-center text-[11px] font-mono select-none cursor-pointer border-r border-b border-slate-300 transition-colors ${
-                      isRowSelected
-                        ? "bg-blue-100 font-bold text-blue-900 border-r-2 border-r-blue-600"
-                        : "bg-slate-100 hover:bg-slate-200 text-slate-500"
-                    }`}
-                    onClick={(e) => handleRowHeaderClick(e, rowIdx)}
-                    onContextMenu={(e) => {
-                      e.preventDefault();
-                      setContextMenu({
-                        x: e.clientX,
-                        y: e.clientY,
-                        rowId: row.id,
-                        colId: sheet.columns[0]?.id || "",
-                        rowIdx,
-                      });
-                    }}
-                  >
-                    {rowIdx + 1}
-                  </td>
-
-                  {/* 11 Data Cells */}
-                  {sheet.columns.map((col, colIdx) => {
-                    const cellVal = row.data[col.id] || "";
-                    const isActiveCell =
-                      activeCell?.rowIdx === rowIdx && activeCell?.colId === col.id;
-                    const isEditing =
-                      editingCell?.rowIdx === rowIdx && editingCell?.colId === col.id;
-                    const cellStyle = (row.styles && row.styles[col.id]) || {};
-
-                    const inSelection =
-                      selectionRange !== null &&
-                      rowIdx >= selectionRange.startRow &&
-                      rowIdx <= selectionRange.endRow &&
-                      colIdx >= selectionRange.startCol &&
-                      colIdx <= selectionRange.endCol;
-
-                    const isTopEdge = inSelection && rowIdx === selectionRange.startRow;
-                    const isBottomEdge = inSelection && rowIdx === selectionRange.endRow;
-                    const isLeftEdge = inSelection && colIdx === selectionRange.startCol;
-                    const isRightEdge = inSelection && colIdx === selectionRange.endCol;
-                    const isBottomRightCorner = isBottomEdge && isRightEdge;
-
-                    const inlineStyle: React.CSSProperties = {
-                      fontWeight: cellStyle.bold ? "bold" : "normal",
-                      fontStyle: cellStyle.italic ? "italic" : "normal",
-                      color: cellStyle.color || "#111827", // text-gray-900 high contrast
-                      backgroundColor: cellStyle.bgColor || undefined,
-                      textAlign: cellStyle.align || "left",
-                    };
-
-                    // Multi-cell selection background and continuous blue boundary
-                    if (isMultiCell && inSelection) {
-                      if (!isActiveCell) {
-                        inlineStyle.backgroundColor = "#dbeafe"; // bg-blue-100
-                      } else {
-                        inlineStyle.backgroundColor = "#eff6ff"; // bg-blue-50/80
-                      }
-
-                      // Inset box-shadow for continuous outer perimeter boundary
-                      const shadows: string[] = [];
-                      if (isTopEdge) shadows.push("inset 0 2px 0 0 #2563eb");
-                      if (isBottomEdge) shadows.push("inset 0 -2px 0 0 #2563eb");
-                      if (isLeftEdge) shadows.push("inset 2px 0 0 0 #2563eb");
-                      if (isRightEdge) shadows.push("inset -2px 0 0 0 #2563eb");
-                      if (shadows.length > 0) {
-                        inlineStyle.boxShadow = shadows.join(", ");
-                      }
-                    }
-
-                    const isPerimeter = isTopEdge || isBottomEdge || isLeftEdge || isRightEdge;
-
-                    return (
-                      <td
-                        key={col.id}
-                        onMouseDown={(e) => handleCellMouseDown(e, rowIdx, colIdx, col)}
-                        onMouseEnter={() => handleCellMouseEnter(rowIdx, colIdx)}
-                        onDoubleClick={() => startEditing(rowIdx, col)}
-                        onContextMenu={(e) => handleContextMenu(e, rowIdx, colIdx, col)}
-                        style={inlineStyle}
-                        className={`relative border-r border-b border-slate-300 px-3 py-1.5 transition-colors text-xs text-gray-900 font-normal overflow-hidden cursor-cell select-none ${
-                          !isMultiCell && isActiveCell
-                            ? "outline outline-2 outline-blue-600 -outline-offset-2 z-10 bg-blue-50/40"
-                            : isPerimeter
-                            ? "z-10"
-                            : inSelection
-                            ? "z-5"
-                            : ""
-                        }`}
-                      >
-                        {/* Google Sheets Active Cell / Multi-cell Range Drag Handle on bottom-right corner */}
-                        {((!isMultiCell && isActiveCell) || (isMultiCell && isBottomRightCorner)) && (
-                          <div className="absolute -bottom-1 -right-1 w-1.5 h-1.5 bg-blue-600 border border-white z-20 pointer-events-none shadow-xs" />
-                        )}
-
-                        {/* Subtle inner outline for active cell inside multi-cell selection */}
-                        {isMultiCell && isActiveCell && (
-                          <div className="absolute inset-0 outline outline-1 outline-blue-400 -outline-offset-1 pointer-events-none z-10" />
-                        )}
-
-                        {isEditing ? (
-                          <input
-                            ref={editInputRef}
-                            type={col.type === "date" ? "date" : col.type === "number" ? "number" : "text"}
-                            value={editValue}
-                            onChange={(e) => setEditValue(e.target.value)}
-                            onBlur={() => commitEdit()}
-                            className="absolute inset-0 w-full h-full px-2 text-xs bg-white text-gray-900 font-medium border-2 border-blue-600 outline-none z-20 select-text"
-                          />
-                        ) : col.type === "dropdown" ? (
-                          <div
-                            onClick={(e) => handleDropdownClick(e, rowIdx, colIdx, col)}
-                            className="flex items-center justify-between w-full cursor-pointer group/pill select-none"
-                          >
-                            {cellVal ? (
-                              <span
-                                className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium border flex items-center gap-1.5 truncate shadow-2xs select-none ${
-                                  (col.id === "col_lead_source" ? SOURCE_COLORS[cellVal] : STATUS_COLORS[cellVal])?.bg || "bg-slate-100"
-                                } ${
-                                  (col.id === "col_lead_source" ? SOURCE_COLORS[cellVal] : STATUS_COLORS[cellVal])?.text || "text-slate-900"
-                                } ${
-                                  (col.id === "col_lead_source" ? SOURCE_COLORS[cellVal] : STATUS_COLORS[cellVal])?.border || "border-slate-300"
-                                }`}
-                              >
-                                <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
-                                <span className="truncate">{cellVal}</span>
-                              </span>
-                            ) : (
-                              <span className="text-slate-400 italic text-[11px] select-none">
-                                {col.id === "col_lead_source" ? "Select source..." : "Select status..."}
-                              </span>
-                            )}
-                            <ChevronDown className="h-3 w-3 text-slate-500 group-hover/pill:text-slate-900 transition-colors shrink-0 ml-1" />
-                          </div>
-                        ) : col.type === "date" ? (
-                          <div
-                            onClick={() => startEditing(rowIdx, col)}
-                            className="flex items-center justify-between w-full cursor-pointer group/date select-none text-xs"
-                          >
-                            {cellVal ? (
-                              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-50/80 text-blue-900 font-medium border border-blue-200/80 text-[11px] truncate shadow-2xs">
-                                <Calendar className="h-3 w-3 text-blue-600 shrink-0" />
-                                <span className="truncate">{cellVal}</span>
-                              </span>
-                            ) : (
-                              <span className="text-slate-400 italic text-[11px] flex items-center gap-1 opacity-70 group-hover/date:opacity-100 transition-opacity">
-                                <Calendar className="h-3 w-3 text-slate-400 shrink-0" />
-                                <span>Pick date...</span>
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <span
-                            className="block w-full truncate select-none text-gray-900"
-                            title={cellVal || undefined}
-                          >
-                            {cellVal ? cellVal : <span className="opacity-0 select-none">-</span>}
-                          </span>
-                        )}
-                      </td>
-                    );
-                  })}
-                </tr>
+                  rowIdx={rowIdx}
+                  row={row}
+                  columns={sheet.columns}
+                  isRowSelected={isRowSelected}
+                  activeCell={activeCell}
+                  selectionRange={selectionRange}
+                  isMultiCell={isMultiCell}
+                  editingCell={editingCell}
+                  editValue={editValue}
+                  onEditValueChange={setEditValue}
+                  onCommitEdit={commitEdit}
+                  editInputRef={editInputRef}
+                  onRowHeaderClick={handleRowHeaderClick}
+                  onRowContextMenu={handleRowContextMenu}
+                  onCellMouseDown={handleCellMouseDown}
+                  onCellMouseEnter={handleCellMouseEnter}
+                  onCellDoubleClick={handleCellDoubleClick}
+                  onCellContextMenu={handleContextMenu}
+                  onDropdownClick={handleDropdownClick}
+                  onStartEditing={startEditing}
+                />
               );
             })}
 
