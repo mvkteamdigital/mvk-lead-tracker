@@ -473,26 +473,16 @@ export function SpreadsheetGrid({
   const [draggedColIdx, setDraggedColIdx] = useState<number | null>(null);
   const [dragOverColIdx, setDragOverColIdx] = useState<number | null>(null);
 
-  // Track max order of existing rows
-  const maxExistingOrder = useMemo(() => {
-    let max = -1;
-    sheet.rows.forEach((r, idx) => {
-      const order = r.order !== undefined ? r.order : idx;
-      if (order > max) max = order;
-    });
-    return max;
-  }, [sheet.rows]);
-
+  // Total row count: at least 1,000 blank rows or rows count + 10
   const totalRowCount = useMemo(() => {
-    return Math.max(1000, maxExistingOrder + 1, expandedRowCount);
-  }, [maxExistingOrder, expandedRowCount]);
+    return Math.max(1000, sheet.rows.length + 10, expandedRowCount);
+  }, [sheet.rows.length, expandedRowCount]);
 
-  // Fast map from row index to database RowData
+  // Fast map from consecutive row index (0, 1, 2...) to database RowData
   const rowsByOrder = useMemo(() => {
     const map = new Map<number, RowData>();
     sheet.rows.forEach((r, idx) => {
-      const order = r.order !== undefined ? r.order : idx;
-      map.set(order, r);
+      map.set(idx, r);
     });
     return map;
   }, [sheet.rows]);
@@ -513,11 +503,19 @@ export function SpreadsheetGrid({
     [rowsByOrder, sheet.id]
   );
 
-  // Windowing calculations
+  // Dynamic windowing calculations with ResizeObserver
   useEffect(() => {
-    if (gridContainerRef.current) {
-      setViewportHeight(gridContainerRef.current.clientHeight || 800);
-    }
+    const el = gridContainerRef.current;
+    if (!el) return;
+    const updateHeight = () => {
+      if (el.clientHeight > 0) {
+        setViewportHeight(el.clientHeight);
+      }
+    };
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(el);
+    return () => observer.disconnect();
   }, []);
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -542,21 +540,21 @@ export function SpreadsheetGrid({
 
   const filteredRowIndices = useMemo(() => {
     if (!isFiltered) return [];
-    return sheet.rows
-      .filter((r) => {
-        if (!isValidLead(r.data)) return false;
-        if (dateFilter && !rowMatchesDateFilter(r.createdAt, dateFilter)) return false;
-        if (statusFilter && !rowMatchesStatusFilter(r.data, statusFilter, sheet.columns)) return false;
-        if (searchQuery.trim()) {
-          const q = searchQuery.toLowerCase();
-          const matches = Object.values(r.data || {}).some((val) =>
-            String(val || "").toLowerCase().includes(q)
-          );
-          if (!matches) return false;
-        }
-        return true;
-      })
-      .map((r, idx) => (r.order !== undefined ? r.order : idx));
+    const indices: number[] = [];
+    sheet.rows.forEach((r, idx) => {
+      if (!isValidLead(r.data)) return;
+      if (dateFilter && !rowMatchesDateFilter(r.createdAt, dateFilter)) return;
+      if (statusFilter && !rowMatchesStatusFilter(r.data, statusFilter, sheet.columns)) return;
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matches = Object.values(r.data || {}).some((val) =>
+          String(val || "").toLowerCase().includes(q)
+        );
+        if (!matches) return;
+      }
+      indices.push(idx);
+    });
+    return indices;
   }, [sheet.rows, isFiltered, dateFilter, statusFilter, searchQuery, sheet.columns]);
 
   // Focus editing input on entering edit mode
@@ -1445,6 +1443,9 @@ export function SpreadsheetGrid({
     setColumnMenu(null);
   };
 
+  // Diagnostic log for desktop table render
+  console.log("Desktop Grid Data:", sheet.rows);
+
   return (
     <div
       ref={gridContainerRef}
@@ -1453,7 +1454,7 @@ export function SpreadsheetGrid({
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
       onCopy={handleCopy}
-      className="flex-1 overflow-auto bg-slate-100 outline-none relative select-none"
+      className="flex-1 min-h-0 w-full overflow-auto bg-slate-100 outline-none relative select-none"
     >
       <div className="min-w-max pb-24 select-none">
         <table className="border-collapse table-fixed bg-white text-slate-800 text-xs shadow-xs select-none">

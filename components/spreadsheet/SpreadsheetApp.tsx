@@ -287,6 +287,9 @@ export function SpreadsheetApp() {
 
   useEffect(() => {
     if (activeSheetId) {
+      setStatusFilter(null);
+      setDateFilter(null);
+      setSearchQuery("");
       fetchActiveSheetDetail(activeSheetId);
     }
   }, [activeSheetId, fetchActiveSheetDetail]);
@@ -445,7 +448,7 @@ export function SpreadsheetApp() {
     setActiveSheet((prev) => {
       if (!prev) return prev;
       const existingMap = new Map<number, RowData>();
-      prev.rows.forEach((r, idx) => existingMap.set(r.order !== undefined ? r.order : idx, r));
+      prev.rows.forEach((r, idx) => existingMap.set(idx, r));
 
       rows.forEach((r) => {
         const orderKey = r.order ?? 0;
@@ -943,28 +946,33 @@ export function SpreadsheetApp() {
             </div>
 
             {/* Desktop View: Full Google Sheets-Style Spreadsheet Grid with 1,000 Rows */}
-            <div className="hidden md:flex flex-1 overflow-hidden flex-col min-h-0">
-              <SpreadsheetGrid
-                sheet={activeSheet}
-                onUpdateCell={handleUpdateCell}
-                onBatchUpdateRows={handleBatchUpdateRows}
-                onAddRowAt={handleAddRowAt}
-                onDeleteRows={handleDeleteRows}
-                onUpdateColumns={handleUpdateColumns}
-                onOpenDropdownModal={(col) => {
-                  setSelectedColumnForDropdown(col);
-                  setIsDropdownModalOpen(true);
-                }}
-                activeCell={activeCell}
-                setActiveCell={setActiveCell}
-                searchQuery={searchQuery}
-                statusFilter={statusFilter}
-                dateFilter={dateFilter}
-                onUndo={handleUndo}
-                onRedo={handleRedo}
-                canUndo={undoStack.length > 0}
-                canRedo={redoStack.length > 0}
-              />
+            <div className="hidden md:flex flex-1 overflow-hidden flex-col min-h-0 w-full">
+              {(() => {
+                console.log("Desktop Grid Data:", activeSheet.rows);
+                return (
+                  <SpreadsheetGrid
+                    sheet={activeSheet}
+                    onUpdateCell={handleUpdateCell}
+                    onBatchUpdateRows={handleBatchUpdateRows}
+                    onAddRowAt={handleAddRowAt}
+                    onDeleteRows={handleDeleteRows}
+                    onUpdateColumns={handleUpdateColumns}
+                    onOpenDropdownModal={(col) => {
+                      setSelectedColumnForDropdown(col);
+                      setIsDropdownModalOpen(true);
+                    }}
+                    activeCell={activeCell}
+                    setActiveCell={setActiveCell}
+                    searchQuery={searchQuery}
+                    statusFilter={statusFilter}
+                    dateFilter={dateFilter}
+                    onUndo={handleUndo}
+                    onRedo={handleRedo}
+                    canUndo={undoStack.length > 0}
+                    canRedo={redoStack.length > 0}
+                  />
+                );
+              })()}
             </div>
           </>
         ) : (
@@ -979,7 +987,12 @@ export function SpreadsheetApp() {
       <BottomTabBar
         sheets={displayedSheets}
         activeSheetId={activeSheetId}
-        onSelectSheet={(id) => setActiveSheetId(id)}
+        onSelectSheet={(id) => {
+          setStatusFilter(null);
+          setDateFilter(null);
+          setSearchQuery("");
+          setActiveSheetId(id);
+        }}
         isAdmin={user?.role === "ADMIN"}
         onOpenNewSheetModal={() => setIsNewSheetModalOpen(true)}
         onRenameSheet={handleRenameSheet}
