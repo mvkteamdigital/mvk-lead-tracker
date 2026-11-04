@@ -10,6 +10,17 @@ export const DEFAULT_FOLLOWUP_OPTIONS = [
   "Purchase Done"
 ];
 
+export const DEFAULT_LEAD_SOURCES = [
+  "Meta Ads",
+  "Google Ads",
+  "Direct",
+  "Referral",
+  "Walk-in",
+  "Website",
+  "MagicBricks / 99acres",
+  "Cold Call"
+];
+
 export const DEFAULT_COLUMNS: ColumnDef[] = [
   {
     id: "col_project_name",
@@ -58,6 +69,14 @@ export const DEFAULT_COLUMNS: ColumnDef[] = [
     width: 170,
     headerStyle: "gold",
     options: []
+  },
+  {
+    id: "col_lead_source",
+    name: "Lead Source",
+    type: "dropdown",
+    width: 160,
+    headerStyle: "gold",
+    options: DEFAULT_LEAD_SOURCES
   },
   {
     id: "col_followup_1",
@@ -141,4 +160,15 @@ export const STATUS_COLORS: Record<string, { bg: string; text: string; border: s
   "Site Visit Completed": { bg: "bg-indigo-50", text: "text-indigo-700 font-medium", border: "border-indigo-200" },
   "C P": { bg: "bg-purple-50", text: "text-purple-700 font-medium", border: "border-purple-200" },
   "Purchase Done": { bg: "bg-emerald-100", text: "text-emerald-800 font-bold", border: "border-emerald-300" },
+};
+
+export const SOURCE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
+  "Meta Ads": { bg: "bg-blue-50", text: "text-blue-700 font-semibold", border: "border-blue-200" },
+  "Google Ads": { bg: "bg-amber-50", text: "text-amber-700 font-semibold", border: "border-amber-200" },
+  "Direct": { bg: "bg-emerald-50", text: "text-emerald-700 font-semibold", border: "border-emerald-200" },
+  "Referral": { bg: "bg-purple-50", text: "text-purple-700 font-semibold", border: "border-purple-200" },
+  "Walk-in": { bg: "bg-orange-50", text: "text-orange-700 font-semibold", border: "border-orange-200" },
+  "Website": { bg: "bg-cyan-50", text: "text-cyan-700 font-semibold", border: "border-cyan-200" },
+  "MagicBricks / 99acres": { bg: "bg-rose-50", text: "text-rose-700 font-semibold", border: "border-rose-200" },
+  "Cold Call": { bg: "bg-slate-100", text: "text-slate-700 font-semibold", border: "border-slate-300" },
 };

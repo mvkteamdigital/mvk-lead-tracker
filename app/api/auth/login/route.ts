@@ -34,6 +34,14 @@ export async function POST(req: Request) {
       );
     }
 
+    // Check if account access has been revoked by admin
+    if (user.status === "REVOKED") {
+      return NextResponse.json(
+        { error: "Access Denied: Your account access has been revoked by an administrator." },
+        { status: 403 }
+      );
+    }
+
     const authUser = {
       id: user.id,
       email: user.email,

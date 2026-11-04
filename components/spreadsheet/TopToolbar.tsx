@@ -29,6 +29,7 @@ import {
   User,
   Undo2,
   Redo2,
+  X,
 } from "lucide-react";
 
 interface TopToolbarProps {
@@ -197,16 +198,31 @@ export function TopToolbar({
           </div>
         </div>
 
-        {/* Center: Search Leads */}
-        <div className="hidden md:flex items-center flex-1 max-w-xs relative">
+        {/* Center: In-Profile Lead Search Bar (filters instantly by phone, name, or project details) */}
+        <div className="hidden md:flex items-center flex-1 max-w-sm relative">
           <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
           <input
             type="text"
-            placeholder="Search leads in active sheet..."
+            placeholder={
+              sheet?.name
+                ? `Search ${sheet.name}'s leads (phone, name, project)...`
+                : "Search leads (phone, name, project)..."
+            }
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            className="w-full pl-9 pr-3 py-1.5 text-xs bg-slate-100/80 hover:bg-slate-100 focus:bg-white border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-amber-500 transition-all text-slate-800"
+            className="w-full pl-9 pr-8 py-1.5 text-xs bg-slate-100/90 hover:bg-slate-100 focus:bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 transition-all text-slate-800 shadow-2xs"
+            title="Instant in-profile lead search without resetting selections"
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => onSearchChange("")}
+              className="absolute right-2.5 top-2 p-1 text-slate-400 hover:text-slate-700 rounded-full"
+              title="Clear search filter"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          )}
         </div>
 
         {/* Right: Export & User Menu */}

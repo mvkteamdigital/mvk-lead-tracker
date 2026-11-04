@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
-import { STATUS_COLORS } from "@/lib/defaults";
+import { STATUS_COLORS, SOURCE_COLORS } from "@/lib/defaults";
 import { rowMatchesStatusFilter } from "@/lib/leads";
 import {
   ChevronDown,
@@ -18,6 +18,7 @@ import {
   ArrowDown,
   Layers,
   Calendar,
+  GripVertical,
 } from "lucide-react";
 
 interface SpreadsheetGridProps {
@@ -103,6 +104,10 @@ export function SpreadsheetGrid({
 
   // Column resizing state
   const [resizingCol, setResizingCol] = useState<{ id: string; startX: number; startWidth: number } | null>(null);
+
+  // Column drag-and-drop reordering state (draggable & adjustable side-to-side)
+  const [draggedColIdx, setDraggedColIdx] = useState<number | null>(null);
+  const [dragOverColIdx, setDragOverColIdx] = useState<number | null>(null);
 
   // Track max order of existing rows
   const maxExistingOrder = useMemo(() => {
@@ -441,6 +446,42 @@ export function SpreadsheetGrid({
       document.removeEventListener("mouseup", handleMouseUp);
     };
   }, [resizingCol, sheet.columns, onUpdateColumns]);
+
+  // Column drag-and-drop reordering handlers (Draggable side-to-side)
+  const handleColDragStart = (e: React.DragEvent, colIdx: number) => {
+    if (resizingCol || renamingColId !== null) {
+      e.preventDefault();
+      return;
+    }
+    setDraggedColIdx(colIdx);
+    e.dataTransfer.setData("text/plain", String(colIdx));
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleColDragOver = (e: React.DragEvent, colIdx: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverColIdx !== colIdx) {
+      setDragOverColIdx(colIdx);
+    }
+  };
+
+  const handleColDrop = async (e: React.DragEvent, targetIdx: number) => {
+    e.preventDefault();
+    if (draggedColIdx !== null && draggedColIdx !== targetIdx) {
+      const reorderedCols = [...sheet.columns];
+      const [movedCol] = reorderedCols.splice(draggedColIdx, 1);
+      reorderedCols.splice(targetIdx, 0, movedCol);
+      await onUpdateColumns(reorderedCols);
+    }
+    setDraggedColIdx(null);
+    setDragOverColIdx(null);
+  };
+
+  const handleColDragEnd = () => {
+    setDraggedColIdx(null);
+    setDragOverColIdx(null);
+  };
 
   // Keyboard Navigation with Google Sheets Range Selection & Standard Spreadsheet Controls
   const handleKeyDown = useCallback(
@@ -991,18 +1032,28 @@ export function SpreadsheetGrid({
                   colIdx >= selectionRange.startCol &&
                   colIdx <= selectionRange.endCol;
 
+                const isBeingDragged = draggedColIdx === colIdx;
+                const isDropTarget = dragOverColIdx === colIdx && draggedColIdx !== colIdx;
+
                 return (
                   <th
                     key={col.id}
+                    draggable={!resizingCol && renamingColId === null}
+                    onDragStart={(e) => handleColDragStart(e, colIdx)}
+                    onDragOver={(e) => handleColDragOver(e, colIdx)}
+                    onDrop={(e) => handleColDrop(e, colIdx)}
+                    onDragEnd={handleColDragEnd}
                     onDoubleClick={() => handleStartRenameColumn(col)}
-                    className={`relative border-b-2 border-r border-slate-400/40 px-3 py-2 text-left font-semibold text-xs tracking-wide select-none group transition-colors cursor-pointer ${headerBg} ${
+                    className={`relative border-b-2 border-r border-slate-400/40 px-2.5 py-2 text-left font-semibold text-xs tracking-wide select-none group transition-all cursor-grab active:cursor-grabbing ${headerBg} ${
                       isColSelected ? "ring-2 ring-blue-500 ring-inset" : ""
+                    } ${isBeingDragged ? "opacity-30 scale-95 shadow-inner" : ""} ${
+                      isDropTarget ? "border-l-4 border-l-blue-600 bg-blue-100 text-blue-950 ring-2 ring-blue-400" : ""
                     }`}
-                    title="Double click or hover menu to rename column"
+                    title="Drag to reorder column side-to-side, double click to rename"
                   >
                     {renamingColId === col.id ? (
                       <div
-                        className="flex items-center gap-1"
+                        className="flex items-center gap-1 cursor-default"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <input
@@ -1014,7 +1065,7 @@ export function SpreadsheetGrid({
                             if (e.key === "Escape") setRenamingColId(null);
                           }}
                           autoFocus
-                          className="w-full px-1.5 py-0.5 text-xs text-slate-950 bg-white rounded border border-blue-500 outline-none"
+                          className="w-full px-1.5 py-0.5 text-xs text-slate-950 bg-white rounded border border-blue-500 outline-none select-text"
                         />
                         <button
                           onClick={() => handleSaveRenameColumn(col.id)}
@@ -1024,12 +1075,15 @@ export function SpreadsheetGrid({
                         </button>
                       </div>
                     ) : (
-                      <div className="flex items-center justify-between gap-1.5">
-                        <span className="truncate" title={col.name}>
-                          {col.name}
-                        </span>
+                      <div className="flex items-center justify-between gap-1">
+                        <div className="flex items-center gap-1 min-w-0 flex-1">
+                          <GripVertical className="h-3.5 w-3.5 opacity-30 group-hover:opacity-90 shrink-0 text-current transition-opacity" />
+                          <span className="truncate" title={`${col.name} (drag to reorder)`}>
+                            {col.name}
+                          </span>
+                        </div>
 
-                        <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                           {col.type === "dropdown" && (
                             <button
                               onClick={(e) => {
@@ -1068,8 +1122,8 @@ export function SpreadsheetGrid({
                     {/* Draggable Column Width Resizer */}
                     <div
                       onMouseDown={(e) => startColumnResize(e, col)}
-                      className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-blue-500 z-10"
-                      title="Drag to resize column"
+                      className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-blue-600 active:bg-blue-700 z-10 transition-colors"
+                      title="Drag to resize column width"
                     />
                   </th>
                 );
@@ -1234,11 +1288,11 @@ export function SpreadsheetGrid({
                             {cellVal ? (
                               <span
                                 className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium border flex items-center gap-1.5 truncate shadow-2xs select-none ${
-                                  STATUS_COLORS[cellVal]?.bg || "bg-slate-100"
+                                  (col.id === "col_lead_source" ? SOURCE_COLORS[cellVal] : STATUS_COLORS[cellVal])?.bg || "bg-slate-100"
                                 } ${
-                                  STATUS_COLORS[cellVal]?.text || "text-slate-900"
+                                  (col.id === "col_lead_source" ? SOURCE_COLORS[cellVal] : STATUS_COLORS[cellVal])?.text || "text-slate-900"
                                 } ${
-                                  STATUS_COLORS[cellVal]?.border || "border-slate-300"
+                                  (col.id === "col_lead_source" ? SOURCE_COLORS[cellVal] : STATUS_COLORS[cellVal])?.border || "border-slate-300"
                                 }`}
                               >
                                 <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
@@ -1246,7 +1300,7 @@ export function SpreadsheetGrid({
                               </span>
                             ) : (
                               <span className="text-slate-400 italic text-[11px] select-none">
-                                Select status...
+                                {col.id === "col_lead_source" ? "Select source..." : "Select status..."}
                               </span>
                             )}
                             <ChevronDown className="h-3 w-3 text-slate-500 group-hover/pill:text-slate-900 transition-colors shrink-0 ml-1" />
@@ -1328,10 +1382,13 @@ export function SpreadsheetGrid({
           onClick={(e) => e.stopPropagation()}
         >
           <div className="px-3 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100">
-            Select Follow-Up Status
+            {openDropdown.colId === "col_lead_source" ? "Select Lead Source" : "Select Follow-Up Status"}
           </div>
           {openDropdown.options.map((opt) => {
-            const colors = STATUS_COLORS[opt];
+            const colors =
+              openDropdown.colId === "col_lead_source"
+                ? SOURCE_COLORS[opt]
+                : STATUS_COLORS[opt];
             return (
               <button
                 key={opt}

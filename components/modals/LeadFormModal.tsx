@@ -64,10 +64,11 @@ export function LeadFormModal({
     return col?.options && col.options.length > 0 ? col.options : DEFAULT_FOLLOWUP_OPTIONS;
   };
 
-  // Detect any additional custom columns added beyond the standard 15
+  // Detect any additional custom columns added beyond the standard 16
   const standardIds = new Set([
     "col_name",
     "col_number",
+    "col_lead_source",
     "col_project_name",
     "col_plot_size",
     "col_budget",
@@ -233,6 +234,25 @@ export function LeadFormModal({
                   className="w-full pl-9 pr-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
                 />
               </div>
+            </div>
+
+            {/* Lead Source - Dynamically bound to grid header */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {getColName("col_lead_source", 6, "Lead Source")}
+              </label>
+              <select
+                value={formData["col_lead_source"] || ""}
+                onChange={(e) => handleChange("col_lead_source", e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+              >
+                <option value="">-- Select Lead Source --</option>
+                {getColOptions("col_lead_source", 6).map((src) => (
+                  <option key={src} value={src}>
+                    {src}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 

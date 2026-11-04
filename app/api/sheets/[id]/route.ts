@@ -15,7 +15,29 @@ function ensureFollowupDateColumns(columns: any[]): { columns: any[]; modified: 
     const col = columns[i];
     newCols.push(col);
 
-    if (col.id === "col_followup_1") {
+    if (col.id === "col_number") {
+      const hasSource = columns.some((c) => c.id === "col_lead_source");
+      if (!hasSource) {
+        newCols.push({
+          id: "col_lead_source",
+          name: "Lead Source",
+          type: "dropdown",
+          width: 160,
+          headerStyle: "gold",
+          options: [
+            "Meta Ads",
+            "Google Ads",
+            "Direct",
+            "Referral",
+            "Walk-in",
+            "Website",
+            "MagicBricks / 99acres",
+            "Cold Call"
+          ],
+        });
+        modified = true;
+      }
+    } else if (col.id === "col_followup_1") {
       const hasDate = columns.some((c) => c.id === "col_followup_1_date");
       if (!hasDate) {
         newCols.push({

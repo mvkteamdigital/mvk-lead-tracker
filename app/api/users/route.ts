@@ -32,6 +32,7 @@ export async function GET(req: Request) {
         name: true,
         email: true,
         role: true,
+        status: true,
         mustChangePassword: true,
         createdAt: true,
         updatedAt: true,
@@ -77,7 +78,7 @@ export async function PUT(req: Request) {
   }
 
   try {
-    const { userId, email, newPassword, name } = await req.json();
+    const { userId, email, newPassword, name, status } = await req.json();
 
     if (!userId) {
       return NextResponse.json({ error: "userId is required" }, { status: 400 });
@@ -92,6 +93,16 @@ export async function PUT(req: Request) {
     }
 
     const updateData: any = {};
+
+    if (status !== undefined) {
+      if (status !== "ACTIVE" && status !== "REVOKED") {
+        return NextResponse.json({ error: "Invalid status value" }, { status: 400 });
+      }
+      if (targetUser.role === "ADMIN" && status === "REVOKED") {
+        return NextResponse.json({ error: "Cannot revoke Administrator access." }, { status: 400 });
+      }
+      updateData.status = status;
+    }
 
     if (email !== undefined && email.trim()) {
       const normalizedEmail = email.trim().toLowerCase();
@@ -132,6 +143,7 @@ export async function PUT(req: Request) {
         name: true,
         email: true,
         role: true,
+        status: true,
         mustChangePassword: true,
         updatedAt: true,
       },
@@ -146,6 +158,71 @@ export async function PUT(req: Request) {
     console.error("Admin user update error:", error);
     return NextResponse.json(
       { error: "Failed to update user account." },
+      { status: 500 }
+    );
+  }
+}
+
+// DELETE /api/users - Admin only: Permanently remove user account or unassign sheets
+export async function DELETE(req: Request) {
+  const user = await getSessionUser(req);
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Check role in JWT session
+  if (user.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden: Admin access required." }, { status: 403 });
+  }
+
+  // Database-level verification
+  const dbUser = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { role: true },
+  });
+
+  if (!dbUser || dbUser.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden: Admin access required." }, { status: 403 });
+  }
+
+  try {
+    const { userId } = await req.json();
+
+    if (!userId) {
+      return NextResponse.json({ error: "userId is required" }, { status: 400 });
+    }
+
+    const targetUser = await prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        sheets: { select: { id: true, name: true } },
+      },
+    });
+
+    if (!targetUser) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+
+    if (targetUser.role === "ADMIN") {
+      return NextResponse.json(
+        { error: "Cannot delete an Administrator account." },
+        { status: 400 }
+      );
+    }
+
+    // Delete user account - sheets are automatically kept safe with userId set to null (SetNull)
+    await prisma.user.delete({
+      where: { id: userId },
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: `User account ${targetUser.email} has been permanently removed. Associated sheets were safely retained.`,
+    });
+  } catch (error: any) {
+    console.error("Admin user delete error:", error);
+    return NextResponse.json(
+      { error: "Failed to remove user account." },
       { status: 500 }
     );
   }

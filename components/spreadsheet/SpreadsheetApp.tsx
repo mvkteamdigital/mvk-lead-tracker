@@ -816,6 +816,7 @@ export function SpreadsheetApp() {
               <MobileLeadListView
                 sheet={activeSheet}
                 searchQuery={searchQuery}
+                onSearchChange={setSearchQuery}
                 statusFilter={statusFilter}
                 onEditLead={(lead) => {
                   setEditingLeadForModal(lead);

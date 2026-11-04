@@ -13,6 +13,17 @@ const DEFAULT_FOLLOWUP_OPTIONS = [
   "Purchase Done"
 ];
 
+const DEFAULT_LEAD_SOURCES = [
+  "Meta Ads",
+  "Google Ads",
+  "Direct",
+  "Referral",
+  "Walk-in",
+  "Website",
+  "MagicBricks / 99acres",
+  "Cold Call"
+];
+
 const defaultColumns = [
   {
     id: "col_project_name",
@@ -61,6 +72,14 @@ const defaultColumns = [
     width: 170,
     headerStyle: "gold",
     options: []
+  },
+  {
+    id: "col_lead_source",
+    name: "Lead Source",
+    type: "dropdown",
+    width: 160,
+    headerStyle: "gold",
+    options: DEFAULT_LEAD_SOURCES
   },
   {
     id: "col_followup_1",

@@ -14,6 +14,9 @@ import {
   Shield,
   Lock,
   UserCheck,
+  UserX,
+  Trash2,
+  Ban,
   FileSpreadsheet,
 } from "lucide-react";
 
@@ -22,6 +25,7 @@ interface UserRecord {
   name: string;
   email: string;
   role: string;
+  status?: string;
   mustChangePassword: boolean;
   sheets: { id: string; name: string; _count: { rows: number } }[];
 }
@@ -135,6 +139,68 @@ export function ManageTeamAccountsModal({
     }
   };
 
+  const handleToggleRevokeAccess = async (userId: string, currentStatus?: string) => {
+    const newStatus = currentStatus === "REVOKED" ? "ACTIVE" : "REVOKED";
+    setSavingAction(true);
+    setNotification(null);
+
+    try {
+      const res = await fetch("/api/users", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          status: newStatus,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to update account status.");
+
+      setNotification({
+        type: "success",
+        msg: newStatus === "REVOKED"
+          ? "Account access has been immediately revoked. User session is now blocked."
+          : "Account access restored successfully.",
+      });
+      await fetchUsers();
+    } catch (err: any) {
+      setNotification({ type: "error", msg: err.message || "Failed to update status." });
+    } finally {
+      setSavingAction(false);
+    }
+  };
+
+  const handleRemoveUser = async (userId: string, email: string) => {
+    if (!confirm(`Are you sure you want to permanently remove member account "${email}"? Their sheet tabs and lead data will remain safely preserved.`)) {
+      return;
+    }
+
+    setSavingAction(true);
+    setNotification(null);
+
+    try {
+      const res = await fetch("/api/users", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to remove user account.");
+
+      setNotification({
+        type: "success",
+        msg: `User account "${email}" removed successfully.`,
+      });
+      await fetchUsers();
+    } catch (err: any) {
+      setNotification({ type: "error", msg: err.message || "Failed to remove user." });
+    } finally {
+      setSavingAction(false);
+    }
+  };
+
   const filteredUsers = users.filter((u) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
@@ -224,6 +290,7 @@ export function ManageTeamAccountsModal({
                     <th className="py-3 px-4">Member Name</th>
                     <th className="py-3 px-4">Email ID</th>
                     <th className="py-3 px-4">Role</th>
+                    <th className="py-3 px-4">Access Status</th>
                     <th className="py-3 px-4">Sheet Tab</th>
                     <th className="py-3 px-4">Password Status</th>
                     <th className="py-3 px-4 text-right">Actions</th>
@@ -301,6 +368,21 @@ export function ManageTeamAccountsModal({
                           </span>
                         </td>
 
+                        {/* Access Status */}
+                        <td className="py-3 px-4">
+                          {u.status === "REVOKED" ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full">
+                              <Ban className="h-3 w-3 text-rose-600" />
+                              <span>Revoked</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                              <Check className="h-3 w-3 text-emerald-600" />
+                              <span>Active</span>
+                            </span>
+                          )}
+                        </td>
+
                         {/* Assigned Sheet */}
                         <td className="py-3 px-4 text-slate-600">
                           {sheet ? (
@@ -361,7 +443,7 @@ export function ManageTeamAccountsModal({
                               </button>
                             </div>
                           ) : (
-                            <div className="flex items-center justify-end gap-1.5">
+                            <div className="flex items-center justify-end gap-1.5 flex-wrap">
                               <button
                                 onClick={() => {
                                   setResettingPasswordUserId(u.id);
@@ -373,6 +455,43 @@ export function ManageTeamAccountsModal({
                                 <KeyRound className="h-3 w-3 text-amber-600" />
                                 <span>Reset Password</span>
                               </button>
+
+                              {u.role !== "ADMIN" && (
+                                <>
+                                  <button
+                                    onClick={() => handleToggleRevokeAccess(u.id, u.status)}
+                                    disabled={savingAction}
+                                    className={`px-2.5 py-1 rounded font-semibold text-[11px] border flex items-center gap-1 transition-colors ${
+                                      u.status === "REVOKED"
+                                        ? "bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300"
+                                        : "bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300"
+                                    }`}
+                                    title={u.status === "REVOKED" ? "Restore account access" : "Immediately revoke access and block login session"}
+                                  >
+                                    {u.status === "REVOKED" ? (
+                                      <>
+                                        <UserCheck className="h-3 w-3 text-emerald-600" />
+                                        <span>Restore Access</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <UserX className="h-3 w-3 text-amber-700" />
+                                        <span>Revoke Access</span>
+                                      </>
+                                    )}
+                                  </button>
+
+                                  <button
+                                    onClick={() => handleRemoveUser(u.id, u.email)}
+                                    disabled={savingAction}
+                                    className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded font-semibold text-[11px] border border-rose-200 flex items-center gap-1 transition-colors"
+                                    title="Permanently remove user account (sheets and leads are safely retained)"
+                                  >
+                                    <Trash2 className="h-3 w-3 text-rose-600" />
+                                    <span>Remove User</span>
+                                  </button>
+                                </>
+                              )}
                             </div>
                           )}
                         </td>

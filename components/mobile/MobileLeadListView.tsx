@@ -3,7 +3,7 @@
 import React, { useMemo } from "react";
 import { SheetDetail, RowData, ColumnDef } from "@/lib/types";
 import { isValidLead, getLeadStatus, getLeadFollowupDate, rowMatchesStatusFilter } from "@/lib/leads";
-import { STATUS_COLORS } from "@/lib/defaults";
+import { STATUS_COLORS, SOURCE_COLORS } from "@/lib/defaults";
 import {
   User,
   Phone,
@@ -14,11 +14,13 @@ import {
   Sparkles,
   Calendar,
   Building,
+  X,
 } from "lucide-react";
 
 interface MobileLeadListViewProps {
   sheet: SheetDetail;
   searchQuery: string;
+  onSearchChange?: (query: string) => void;
   statusFilter?: string | null;
   onEditLead: (row: RowData) => void;
   onAddNewLead: () => void;
@@ -27,6 +29,7 @@ interface MobileLeadListViewProps {
 export function MobileLeadListView({
   sheet,
   searchQuery,
+  onSearchChange,
   statusFilter = null,
   onEditLead,
   onAddNewLead,
@@ -60,6 +63,32 @@ export function MobileLeadListView({
         </div>
         <span className="text-[11px] text-slate-500">Tap card to edit</span>
       </div>
+
+      {/* Mobile In-Profile Search Bar: Instant search by name, number, or project */}
+      {onSearchChange && (
+        <div className="px-3 py-2 bg-white border-b border-slate-200 shadow-2xs sticky top-[41px] z-10">
+          <div className="relative flex items-center">
+            <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-400" />
+            <input
+              type="text"
+              placeholder={`Search ${sheet.name}'s leads (phone, name, project)...`}
+              value={searchQuery}
+              onChange={(e) => onSearchChange(e.target.value)}
+              className="w-full pl-9 pr-8 py-1.5 text-xs bg-slate-100 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => onSearchChange("")}
+                className="absolute right-2.5 top-2 p-1 text-slate-400 hover:text-slate-700 rounded-full"
+                title="Clear search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Cards List */}
       <div className="p-3 sm:p-4 space-y-2.5">
@@ -103,6 +132,9 @@ export function MobileLeadListView({
             const latestDate = getLeadFollowupDate(row.data, sheet.columns);
             const statusStyle = latestStatus !== "Unassigned" ? STATUS_COLORS[latestStatus] : null;
 
+            const leadSource = row.data["col_lead_source"];
+            const sourceStyle = leadSource ? SOURCE_COLORS[leadSource] : null;
+
             return (
               <div
                 key={row.id}
@@ -134,9 +166,21 @@ export function MobileLeadListView({
                       )}
                     </div>
 
-                    {/* Status & Date Badges */}
-                    {(latestStatus !== "Unassigned" || latestDate) && (
+                    {/* Badges: Lead Source, Status & Follow-Up Date */}
+                    {(latestStatus !== "Unassigned" || latestDate || leadSource) && (
                       <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                        {leadSource && (
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border flex items-center gap-1 shadow-2xs ${
+                              sourceStyle?.bg || "bg-indigo-50"
+                            } ${sourceStyle?.text || "text-indigo-800 font-semibold"} ${
+                              sourceStyle?.border || "border-indigo-200"
+                            }`}
+                          >
+                            <Sparkles className="h-2.5 w-2.5 text-amber-500 shrink-0" />
+                            <span className="truncate max-w-[120px]">{leadSource}</span>
+                          </span>
+                        )}
                         {latestStatus !== "Unassigned" && (
                           <span
                             className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border flex items-center gap-1 ${
