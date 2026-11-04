@@ -183,6 +183,14 @@ export function MobileLeadListView({
             const number = row.data[numberKey] || "No Phone Number";
             const initial = name.charAt(0).toUpperCase() || "?";
 
+            const projectCol = sheet.columns.find((c) => c.id === "col_project_name" || c.name.toLowerCase().includes("project"));
+            const projectName =
+              (projectCol ? row.data[projectCol.id] : null) ||
+              row.data.col_project_name ||
+              row.data["Project Name"] ||
+              row.data["project_name"] ||
+              null;
+
             const leadSource = getLeadSource(row.data);
             const sourceStyle = leadSource ? SOURCE_COLORS[leadSource] : null;
             const addedDate = formatAddedDate(row.createdAt);
@@ -200,11 +208,24 @@ export function MobileLeadListView({
                   </div>
 
                   <div className="min-w-0 flex-1">
-                    {/* 1. Row 1: Display ONLY the Lead Name */}
+                    {/* 1. Row 1: Inline Lead Name • Project Name */}
                     <div className="flex items-center justify-between gap-1.5 min-w-0">
-                      <h4 className="text-sm font-bold text-slate-900 truncate" title={name}>
-                        {name}
-                      </h4>
+                      <div className="flex items-center gap-1.5 min-w-0 flex-1">
+                        <h4
+                          className={`text-sm font-bold text-slate-900 truncate ${projectName ? "shrink-0 max-w-[60%]" : ""}`}
+                          title={name}
+                        >
+                          {name}
+                        </h4>
+                        {projectName && (
+                          <div className="flex items-center gap-1.5 min-w-0 flex-1 text-xs text-slate-500 font-medium">
+                            <span className="text-slate-300 shrink-0">•</span>
+                            <span className="truncate" title={projectName}>
+                              {projectName}
+                            </span>
+                          </div>
+                        )}
+                      </div>
                       <ChevronRight className="h-3.5 w-3.5 text-slate-300 shrink-0" />
                     </div>
 
