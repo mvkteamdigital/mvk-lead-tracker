@@ -1,5 +1,15 @@
 import { ColumnDef } from "./types";
 
+export const HARDCODED_STATUS_FILTERS = [
+  "Follow-up Needed",
+  "Dropped / Not Interested",
+  "RNR",
+  "Site Visit Booked – Not Completed",
+  "Site Visit Completed",
+  "C P",
+  "Purchase Done"
+] as const;
+
 export const DEFAULT_FOLLOWUP_OPTIONS = [
   "Follow-up Needed",
   "Dropped / Not Interested",
@@ -179,6 +189,7 @@ export const STATUS_COLORS: Record<string, { bg: string; text: string; border: s
   "Dropped / Not Interested": { bg: "bg-rose-50", text: "text-rose-700 font-medium", border: "border-rose-200" },
   "RNR": { bg: "bg-orange-50", text: "text-orange-700 font-medium", border: "border-orange-200" },
   "Site Visit Booked – Not Completed": { bg: "bg-blue-50", text: "text-blue-700 font-medium", border: "border-blue-200" },
+  "Site Visit Booked - Not Completed": { bg: "bg-blue-50", text: "text-blue-700 font-medium", border: "border-blue-200" },
   "Site Visit Completed": { bg: "bg-indigo-50", text: "text-indigo-700 font-medium", border: "border-indigo-200" },
   "C P": { bg: "bg-purple-50", text: "text-purple-700 font-medium", border: "border-purple-200" },
   "Purchase Done": { bg: "bg-emerald-100", text: "text-emerald-800 font-bold", border: "border-emerald-300" },

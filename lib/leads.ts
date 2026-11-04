@@ -321,14 +321,16 @@ export function rowMatchesStatusFilter(
     return currentStatus === "Unassigned";
   }
 
+  const normFilter = statusFilter.trim().toLowerCase().replace(/[–—]/g, "-");
+
   // Check if primary status matches
-  if (currentStatus.toLowerCase() === statusFilter.toLowerCase()) {
+  if (currentStatus.trim().toLowerCase().replace(/[–—]/g, "-") === normFilter) {
     return true;
   }
 
   // Check if Lead Source matches (e.g., "Meta Ads", "Google Ads", etc.)
   const leadSource = getLeadSource(rowData);
-  if (leadSource && leadSource.toLowerCase() === statusFilter.toLowerCase()) {
+  if (leadSource && leadSource.toLowerCase() === normFilter) {
     return true;
   }
 
@@ -346,7 +348,7 @@ export function rowMatchesStatusFilter(
     const val = rowData[k];
     return (
       typeof val === "string" &&
-      val.trim().toLowerCase() === statusFilter.toLowerCase()
+      val.trim().toLowerCase().replace(/[–—]/g, "-") === normFilter
     );
   });
 }

@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { SheetMeta, SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
 import { isValidLead, getLeadStatus, isUnattendedLead, rowMatchesStatusFilter, rowMatchesDateFilter } from "@/lib/leads";
-import { DEFAULT_FOLLOWUP_OPTIONS, DEFAULT_LEAD_SOURCES, DEFAULT_STATUS_FILTER_VISIBILITY, DEFAULT_SOURCE_FILTER_VISIBILITY } from "@/lib/defaults";
+import { HARDCODED_STATUS_FILTERS } from "@/lib/defaults";
 import { TopToolbar } from "./TopToolbar";
 import { StatusFilterBar } from "./StatusFilterBar";
 import { FormulaBar } from "./FormulaBar";
@@ -83,53 +83,7 @@ export function SpreadsheetApp() {
   // Real-time displayed lead count: when date filter is active, reflects ONLY leads added on that date!
   const displayedLeadCount = dateFilter ? activeSheetDateFilteredRows.length : activeSheetValidLeadCount;
 
-  // Dynamically extract all available custom dropdown options from the active sheet.
-  // When a user adds an option via "Customize Dropdowns", activeSheet.columns updates,
-  // and the filter bar reflects the new option automatically!
-  const availableStatusOptions = useMemo(() => {
-    const optionsSet = new Set<string>();
-    if (activeSheet?.columns) {
-      activeSheet.columns.forEach((col) => {
-        if (col.type === "dropdown" && col.id.includes("followup") && Array.isArray(col.options)) {
-          col.options.forEach((opt) => {
-            if (opt && opt.trim()) optionsSet.add(opt.trim());
-          });
-        }
-      });
-    }
-    if (optionsSet.size === 0) {
-      DEFAULT_FOLLOWUP_OPTIONS.forEach((opt) => optionsSet.add(opt));
-    }
-    return Array.from(optionsSet);
-  }, [activeSheet?.columns]);
-
-  // Dynamically extract all available lead source options from the active sheet
-  const availableSourceOptions = useMemo(() => {
-    const sourceCol = activeSheet?.columns.find(
-      (c) => c.id === "col_lead_source" || c.name.toLowerCase().includes("source")
-    );
-    if (sourceCol && Array.isArray(sourceCol.options) && sourceCol.options.length > 0) {
-      return sourceCol.options;
-    }
-    return DEFAULT_LEAD_SOURCES;
-  }, [activeSheet?.columns]);
-
-  // Extract filter visibility maps for status and sources from the active sheet
-  const statusFilterVisibility = useMemo(() => {
-    const statusCol = activeSheet?.columns.find(
-      (c) => c.type === "dropdown" && c.id.includes("followup")
-    );
-    return statusCol?.filterVisibility || DEFAULT_STATUS_FILTER_VISIBILITY;
-  }, [activeSheet?.columns]);
-
-  const sourceFilterVisibility = useMemo(() => {
-    const sourceCol = activeSheet?.columns.find(
-      (c) => c.id === "col_lead_source" || c.name.toLowerCase().includes("source")
-    );
-    return sourceCol?.filterVisibility || DEFAULT_SOURCE_FILTER_VISIBILITY;
-  }, [activeSheet?.columns]);
-
-  // Real-time summary metric counters for each status option + Lead Sources + Unattended + Unassigned.
+  // Real-time summary metric counters for the 7 hardcoded status options + Unattended.
   // When dateFilter is active, status counters automatically update to count ONLY leads added on that date!
   const statusCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -140,26 +94,15 @@ export function SpreadsheetApp() {
       isUnattendedLead(r.data, activeSheet.columns)
     ).length;
 
-    // Status option counts (respecting active date filter)
-    availableStatusOptions.forEach((opt) => {
+    // Hardcoded 7 status option counts (respecting active date filter)
+    HARDCODED_STATUS_FILTERS.forEach((opt) => {
       counts[opt] = activeSheetDateFilteredRows.filter((r) =>
         rowMatchesStatusFilter(r.data, opt, activeSheet.columns)
       ).length;
     });
-
-    // Lead Source option counts (respecting active date filter)
-    availableSourceOptions.forEach((opt) => {
-      counts[opt] = activeSheetDateFilteredRows.filter((r) =>
-        rowMatchesStatusFilter(r.data, opt, activeSheet.columns)
-      ).length;
-    });
-
-    counts["Unassigned"] = activeSheetDateFilteredRows.filter(
-      (r) => getLeadStatus(r.data, activeSheet.columns) === "Unassigned"
-    ).length;
 
     return counts;
-  }, [activeSheet, availableStatusOptions, availableSourceOptions, activeSheetDateFilteredRows]);
+  }, [activeSheet, activeSheetDateFilteredRows]);
 
   // Derived state: sheet list with reactive real-time valid lead count for the active tab
   const displayedSheets = useMemo(() => {
@@ -910,10 +853,6 @@ export function SpreadsheetApp() {
       <StatusFilterBar
         totalLeads={displayedLeadCount}
         allTimeTotalLeads={activeSheetValidLeadCount}
-        availableStatuses={availableStatusOptions}
-        statusFilterVisibility={statusFilterVisibility}
-        availableSources={availableSourceOptions}
-        sourceFilterVisibility={sourceFilterVisibility}
         statusCounts={statusCounts}
         activeFilter={statusFilter}
         onSelectFilter={setStatusFilter}
