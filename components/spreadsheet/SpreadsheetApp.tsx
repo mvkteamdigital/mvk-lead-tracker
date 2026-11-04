@@ -946,7 +946,7 @@ export function SpreadsheetApp() {
             </div>
 
             {/* Desktop View: Full Google Sheets-Style Spreadsheet Grid with 1,000 Rows */}
-            <div className="hidden md:flex flex-1 overflow-hidden flex-col min-h-0 w-full">
+            <div className="hidden md:flex flex-1 flex-col h-[calc(100vh-200px)] min-h-[400px] overflow-hidden w-full">
               {(() => {
                 console.log("Desktop Grid Data:", activeSheet.rows);
                 return (

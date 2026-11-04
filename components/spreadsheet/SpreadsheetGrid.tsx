@@ -41,7 +41,7 @@ interface SpreadsheetGridProps {
 }
 
 const ROW_HEIGHT = 36;
-const BUFFER = 25;
+const BUFFER = 50;
 
 // ==========================================
 // 1. MEMOIZED GRID CELL (0ms Click & Render)
@@ -225,6 +225,7 @@ const MemoizedGridCell = React.memo(GridCell);
 // ==========================================
 interface GridRowProps {
   rowIdx: number;
+  serialNumber: number;
   row: RowData;
   columns: ColumnDef[];
   isRowSelected: boolean;
@@ -248,6 +249,7 @@ interface GridRowProps {
 
 const GridRow = ({
   rowIdx,
+  serialNumber,
   row,
   columns,
   isRowSelected,
@@ -289,7 +291,7 @@ const GridRow = ({
         onClick={(e) => onRowHeaderClick(e, rowIdx)}
         onContextMenu={(e) => onRowContextMenu(e, row.id, rowIdx)}
       >
-        {rowIdx + 1}
+        {serialNumber}
       </td>
 
       {/* Cells */}
@@ -346,6 +348,7 @@ const GridRow = ({
 };
 
 const MemoizedGridRow = React.memo(GridRow, (prev, next) => {
+  if (prev.serialNumber !== next.serialNumber) return false;
   if (prev.row !== next.row) return false;
   if (prev.columns !== next.columns) return false;
   if (prev.isRowSelected !== next.isRowSelected) return false;
@@ -412,7 +415,12 @@ export function SpreadsheetGrid({
 
   // Virtual windowing scroll tracking
   const [scrollTop, setScrollTop] = useState(0);
-  const [viewportHeight, setViewportHeight] = useState(800);
+  const [viewportHeight, setViewportHeight] = useState(() => {
+    if (typeof window !== "undefined") {
+      return Math.max(window.innerHeight - 200, 600);
+    }
+    return 800;
+  });
   const gridContainerRef = useRef<HTMLDivElement>(null);
 
   // Editing state
@@ -508,14 +516,19 @@ export function SpreadsheetGrid({
     const el = gridContainerRef.current;
     if (!el) return;
     const updateHeight = () => {
-      if (el.clientHeight > 0) {
-        setViewportHeight(el.clientHeight);
+      const h = el.clientHeight || (typeof window !== "undefined" ? window.innerHeight - 200 : 800);
+      if (h > 0) {
+        setViewportHeight(h);
       }
     };
     updateHeight();
     const observer = new ResizeObserver(updateHeight);
     observer.observe(el);
-    return () => observer.disconnect();
+    window.addEventListener("resize", updateHeight);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateHeight);
+    };
   }, []);
 
   const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -1454,7 +1467,8 @@ export function SpreadsheetGrid({
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
       onCopy={handleCopy}
-      className="flex-1 min-h-0 w-full overflow-auto bg-slate-100 outline-none relative select-none"
+      className="flex-1 w-full h-[calc(100vh-200px)] min-h-[400px] overflow-y-auto overflow-x-auto bg-slate-100 outline-none relative select-none"
+      style={{ height: "calc(100vh - 200px)" }}
     >
       <div className="min-w-max pb-24 select-none">
         <table className="border-collapse table-fixed bg-white text-slate-800 text-xs shadow-xs select-none">
@@ -1631,8 +1645,9 @@ export function SpreadsheetGrid({
             )}
 
             {/* Rows to render (filtered leads consecutively, or virtualized window) */}
-            {(isFiltered ? filteredRowIndices : visibleRowIndices).map((rowIdx) => {
+            {(isFiltered ? filteredRowIndices : visibleRowIndices).map((rowIdx, renderedIdx) => {
               const row = getRowAtIndex(rowIdx);
+              const serialNumber = isFiltered ? renderedIdx + 1 : rowIdx + 1;
 
               const isRowSelected =
                 selectionRange !== null &&
@@ -1643,8 +1658,9 @@ export function SpreadsheetGrid({
 
               return (
                 <MemoizedGridRow
-                  key={rowIdx}
+                  key={row.id}
                   rowIdx={rowIdx}
+                  serialNumber={serialNumber}
                   row={row}
                   columns={sheet.columns}
                   isRowSelected={isRowSelected}
