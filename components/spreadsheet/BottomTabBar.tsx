@@ -13,6 +13,9 @@ import {
   Edit2,
   Users,
   Check,
+  GripVertical,
+  ArrowLeft,
+  ArrowRight,
 } from "lucide-react";
 
 interface BottomTabBarProps {
@@ -23,6 +26,7 @@ interface BottomTabBarProps {
   onOpenNewSheetModal: () => void;
   onRenameSheet: (id: string, newName: string) => Promise<void>;
   onDeleteSheet: (id: string) => Promise<void>;
+  onReorderSheets?: (reorderedSheets: SheetMeta[]) => Promise<void> | void;
 }
 
 export function BottomTabBar({
@@ -33,11 +37,76 @@ export function BottomTabBar({
   onOpenNewSheetModal,
   onRenameSheet,
   onDeleteSheet,
+  onReorderSheets,
 }: BottomTabBarProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [menuSheetId, setMenuSheetId] = useState<string | null>(null);
   const [renamingSheetId, setRenamingSheetId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
+
+  // Drag and drop tab reordering state
+  const [draggedSheetIdx, setDraggedSheetIdx] = useState<number | null>(null);
+  const [dragOverSheetIdx, setDragOverSheetIdx] = useState<number | null>(null);
+
+  // Close context menu on outside click
+  useEffect(() => {
+    const handleDocumentClick = () => {
+      setMenuSheetId(null);
+    };
+    document.addEventListener("click", handleDocumentClick);
+    return () => document.removeEventListener("click", handleDocumentClick);
+  }, []);
+
+  // HTML5 Drag-and-Drop handlers
+  const handleDragStart = (e: React.DragEvent, index: number) => {
+    if (renamingSheetId !== null) {
+      e.preventDefault();
+      return;
+    }
+    setDraggedSheetIdx(index);
+    e.dataTransfer.setData("text/plain", String(index));
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e: React.DragEvent, index: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (dragOverSheetIdx !== index) {
+      setDragOverSheetIdx(index);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent, targetIndex: number) => {
+    e.preventDefault();
+    if (draggedSheetIdx !== null && draggedSheetIdx !== targetIndex) {
+      const updated = [...sheets];
+      const [moved] = updated.splice(draggedSheetIdx, 1);
+      updated.splice(targetIndex, 0, moved);
+      if (onReorderSheets) {
+        await onReorderSheets(updated);
+      }
+    }
+    setDraggedSheetIdx(null);
+    setDragOverSheetIdx(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedSheetIdx(null);
+    setDragOverSheetIdx(null);
+  };
+
+  // Move sheet left or right programmatically (great for mobile/touch or quick sorting)
+  const handleMoveSheet = async (sheetIndex: number, direction: "left" | "right") => {
+    const targetIndex = direction === "left" ? sheetIndex - 1 : sheetIndex + 1;
+    if (targetIndex < 0 || targetIndex >= sheets.length) return;
+    const updated = [...sheets];
+    const [moved] = updated.splice(sheetIndex, 1);
+    updated.splice(targetIndex, 0, moved);
+    if (onReorderSheets) {
+      await onReorderSheets(updated);
+    }
+    setMenuSheetId(null);
+  };
 
   // Auto-scroll active tab into view on mobile & desktop
   useEffect(() => {
@@ -132,24 +201,45 @@ export function BottomTabBar({
         className="flex-1 flex items-stretch overflow-x-auto no-scrollbar scroll-smooth touch-pan-x"
         style={{ scrollbarWidth: "none", WebkitOverflowScrolling: "touch" }}
       >
-        {sheets.map((s) => {
+        {sheets.map((s, idx) => {
           const isActive = s.id === activeSheetId;
           const isRenaming = renamingSheetId === s.id;
+          const isBeingDragged = draggedSheetIdx === idx;
+          const isDropTarget = dragOverSheetIdx === idx && draggedSheetIdx !== idx;
 
           return (
             <div
               key={s.id}
               data-active={isActive}
+              draggable={!isRenaming}
+              onDragStart={(e) => handleDragStart(e, idx)}
+              onDragOver={(e) => handleDragOver(e, idx)}
+              onDrop={(e) => handleDrop(e, idx)}
+              onDragEnd={handleDragEnd}
               onClick={() => onSelectSheet(s.id)}
-              className={`group relative flex items-center gap-1.5 px-3 sm:px-3.5 py-1 cursor-pointer border-r border-slate-800 transition-all min-w-[90px] sm:min-w-[120px] max-w-[200px] shrink-0 active:bg-slate-850 select-none ${
+              className={`group relative flex items-center gap-1.5 px-2.5 sm:px-3 py-1 cursor-grab active:cursor-grabbing border-r border-slate-800 transition-all min-w-[95px] sm:min-w-[120px] max-w-[210px] shrink-0 active:bg-slate-850 select-none ${
                 isActive
                   ? "bg-slate-800 text-white font-bold border-b-2 border-b-amber-400 shadow-inner"
                   : "bg-slate-900/80 text-slate-400 hover:bg-slate-850 hover:text-slate-200 font-medium"
+              } ${
+                isBeingDragged
+                  ? "opacity-30 scale-95 border-amber-400 border-dashed bg-slate-950"
+                  : ""
+              } ${
+                isDropTarget
+                  ? "border-l-4 border-l-amber-400 bg-slate-800 ring-2 ring-amber-400/60 shadow-md"
+                  : ""
               }`}
+              title={`${s.name} (drag left/right to reorder)`}
             >
               {/* Active Tab Accent Bar */}
               {isActive && (
                 <div className="absolute top-0 left-0 right-0 h-0.5 bg-amber-400" />
+              )}
+
+              {/* Grip Vertical Handle Icon */}
+              {!isRenaming && (
+                <GripVertical className="h-3 w-3 text-slate-500 group-hover:text-amber-400 opacity-30 group-hover:opacity-90 shrink-0 transition-opacity" />
               )}
 
               {/* Tab Title or Inline Rename Input */}
@@ -167,7 +257,7 @@ export function BottomTabBar({
                       if (e.key === "Escape") setRenamingSheetId(null);
                     }}
                     autoFocus
-                    className="w-full px-1.5 py-0.5 text-xs bg-slate-950 text-white rounded border border-amber-400 outline-none"
+                    className="w-full px-1.5 py-0.5 text-xs bg-slate-950 text-white rounded border border-amber-400 outline-none select-text"
                   />
                   <button
                     onClick={() => handleSaveRename(s.id)}
@@ -182,7 +272,7 @@ export function BottomTabBar({
                     {s.name}
                   </span>
                   
-                  {/* Lead Count Badge (Thinner, text-[10px]) */}
+                  {/* Lead Count Badge */}
                   {s.rowCount !== undefined && (
                     <span
                       className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold shrink-0 min-w-[16px] text-center leading-tight ${
@@ -197,8 +287,8 @@ export function BottomTabBar({
                 </div>
               )}
 
-              {/* Admin Context Menu Trigger */}
-              {isAdmin && !isRenaming && (
+              {/* Tab Options / Actions Trigger */}
+              {!isRenaming && (
                 <div
                   className="relative shrink-0"
                   onClick={(e) => e.stopPropagation()}
@@ -208,41 +298,67 @@ export function BottomTabBar({
                       setMenuSheetId(menuSheetId === s.id ? null : s.id)
                     }
                     className="p-0.5 rounded text-slate-500 hover:text-white hover:bg-slate-700 transition-colors opacity-40 group-hover:opacity-100"
-                    title="Tab options"
+                    title="Tab options & reorder"
                   >
                     <MoreVertical className="h-3 w-3" />
                   </button>
 
                   {/* Dropdown Menu */}
                   {menuSheetId === s.id && (
-                    <div className="absolute bottom-full right-0 mb-1.5 w-40 bg-white rounded-lg shadow-2xl border border-slate-200 py-1 z-50 text-slate-800 animate-in fade-in zoom-in-95 text-xs">
+                    <div className="absolute bottom-full right-0 mb-1.5 w-44 bg-white rounded-xl shadow-2xl border border-slate-200 py-1 z-50 text-slate-800 animate-in fade-in zoom-in-95 text-xs">
                       <div className="px-2.5 py-1 text-[9px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100 truncate">
                         Tab: {s.name}
                       </div>
-                      <button
-                        onClick={() => handleStartRename(s)}
-                        className="w-full px-2.5 py-1 text-left hover:bg-slate-100 flex items-center gap-1.5 font-medium"
-                      >
-                        <Edit2 className="h-3 w-3 text-blue-600" />
-                        <span>Rename Sheet</span>
-                      </button>
-                      {sheets.length > 1 && (
+
+                      {/* Move Left / Right actions (Great for mobile & accessibility) */}
+                      {idx > 0 && (
                         <button
-                          onClick={() => {
-                            if (
-                              confirm(
-                                `Are you sure you want to delete tab "${s.name}"? All lead records in this tab will be permanently removed.`
-                              )
-                            ) {
-                              onDeleteSheet(s.id);
-                            }
-                            setMenuSheetId(null);
-                          }}
-                          className="w-full px-2.5 py-1 text-left hover:bg-rose-50 text-rose-600 flex items-center gap-1.5 font-medium"
+                          onClick={() => handleMoveSheet(idx, "left")}
+                          className="w-full px-2.5 py-1.5 text-left hover:bg-slate-100 flex items-center gap-1.5 font-medium text-slate-700"
                         >
-                          <Trash2 className="h-3 w-3" />
-                          <span>Delete Sheet</span>
+                          <ArrowLeft className="h-3 w-3 text-amber-600" />
+                          <span>Move Tab Left</span>
                         </button>
+                      )}
+                      {idx < sheets.length - 1 && (
+                        <button
+                          onClick={() => handleMoveSheet(idx, "right")}
+                          className="w-full px-2.5 py-1.5 text-left hover:bg-slate-100 flex items-center gap-1.5 font-medium text-slate-700"
+                        >
+                          <ArrowRight className="h-3 w-3 text-amber-600" />
+                          <span>Move Tab Right</span>
+                        </button>
+                      )}
+
+                      {isAdmin && (
+                        <>
+                          <div className="border-t border-slate-100 my-0.5" />
+                          <button
+                            onClick={() => handleStartRename(s)}
+                            className="w-full px-2.5 py-1 text-left hover:bg-slate-100 flex items-center gap-1.5 font-medium"
+                          >
+                            <Edit2 className="h-3 w-3 text-blue-600" />
+                            <span>Rename Sheet</span>
+                          </button>
+                          {sheets.length > 1 && (
+                            <button
+                              onClick={() => {
+                                if (
+                                  confirm(
+                                    `Are you sure you want to delete tab "${s.name}"? All lead records in this tab will be permanently removed.`
+                                  )
+                                ) {
+                                  onDeleteSheet(s.id);
+                                }
+                                setMenuSheetId(null);
+                              }}
+                              className="w-full px-2.5 py-1 text-left hover:bg-rose-50 text-rose-600 flex items-center gap-1.5 font-medium"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                              <span>Delete Sheet</span>
+                            </button>
+                          )}
+                        </>
                       )}
                     </div>
                   )}

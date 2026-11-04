@@ -128,3 +128,51 @@ export async function POST(req: Request) {
     );
   }
 }
+
+// PUT /api/sheets - Reorder sheet tabs (batch update order)
+export async function PUT(req: Request) {
+  const user = await getSessionUser();
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const { sheetOrders } = await req.json();
+
+    if (!Array.isArray(sheetOrders) || sheetOrders.length === 0) {
+      return NextResponse.json(
+        { error: "Invalid sheet orders payload" },
+        { status: 400 }
+      );
+    }
+
+    // Update order for each sheet in a database transaction
+    if (typeof sheetOrders[0] === "string") {
+      await prisma.$transaction(
+        (sheetOrders as string[]).map((id, index) =>
+          prisma.sheet.update({
+            where: { id },
+            data: { order: index },
+          })
+        )
+      );
+    } else {
+      await prisma.$transaction(
+        (sheetOrders as { id: string; order: number }[]).map((item) =>
+          prisma.sheet.update({
+            where: { id: item.id },
+            data: { order: item.order },
+          })
+        )
+      );
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (error: any) {
+    console.error("Error reordering sheets:", error);
+    return NextResponse.json(
+      { error: "Failed to reorder sheets" },
+      { status: 500 }
+    );
+  }
+}

@@ -213,15 +213,32 @@ export function SpreadsheetApp() {
       const res = await fetch("/api/sheets");
       if (!res.ok) throw new Error("Failed to load sheets");
       const data = await res.json();
-      setSheets(data.sheets || []);
+      let fetchedSheets: SheetMeta[] = data.sheets || [];
 
-      if (data.sheets && data.sheets.length > 0) {
+      // Sort by order asc; respect persistent arrangement
+      try {
+        const savedOrder = localStorage.getItem("mvk_sheet_order");
+        if (savedOrder) {
+          const orderIds: string[] = JSON.parse(savedOrder);
+          const orderMap = new Map<string, number>();
+          orderIds.forEach((id, idx) => orderMap.set(id, idx));
+          fetchedSheets.sort((a, b) => {
+            const aIdx = orderMap.has(a.id) ? orderMap.get(a.id)! : a.order;
+            const bIdx = orderMap.has(b.id) ? orderMap.get(b.id)! : b.order;
+            return aIdx - bIdx;
+          });
+        }
+      } catch (e) {}
+
+      setSheets(fetchedSheets);
+
+      if (fetchedSheets && fetchedSheets.length > 0) {
         // If no active sheet or active sheet was removed, select the first accessible sheet
         setActiveSheetId((prev) => {
-          if (prev && data.sheets.some((s: SheetMeta) => s.id === prev)) {
+          if (prev && fetchedSheets.some((s: SheetMeta) => s.id === prev)) {
             return prev;
           }
-          return data.sheets[0].id;
+          return fetchedSheets[0].id;
         });
       } else {
         setActiveSheetId(null);
@@ -709,6 +726,37 @@ export function SpreadsheetApp() {
     await handleDeleteRows([rowId]);
   };
 
+  // 16. Reorder Sheets (Drag and Drop / Tab Sorting with Persistent Neon DB Sync)
+  const handleReorderSheets = async (reorderedSheets: SheetMeta[]) => {
+    // 1. Optimistic update in state immediately
+    const updatedWithOrder = reorderedSheets.map((s, idx) => ({ ...s, order: idx }));
+    setSheets(updatedWithOrder);
+
+    // 2. Save to local storage for immediate zero-latency persistence
+    try {
+      localStorage.setItem(
+        "mvk_sheet_order",
+        JSON.stringify(reorderedSheets.map((s) => s.id))
+      );
+    } catch (e) {
+      console.error(e);
+    }
+
+    // 3. Persist order to the Neon PostgreSQL database
+    try {
+      const res = await fetch("/api/sheets", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sheetOrders: reorderedSheets.map((s) => s.id) }),
+      });
+      if (!res.ok) {
+        console.error("Failed to persist sheet order to DB");
+      }
+    } catch (err) {
+      console.error("Reorder sheets DB error:", err);
+    }
+  };
+
   if (loadingSheets) {
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-900 text-white gap-3">
@@ -861,7 +909,7 @@ export function SpreadsheetApp() {
         )}
       </div>
 
-      {/* 4. Large, Thicker, High-Contrast Bottom Tab Bar */}
+      {/* 4. Large, Thicker, High-Contrast Bottom Tab Bar (Draggable & Reorderable) */}
       <BottomTabBar
         sheets={displayedSheets}
         activeSheetId={activeSheetId}
@@ -870,6 +918,7 @@ export function SpreadsheetApp() {
         onOpenNewSheetModal={() => setIsNewSheetModalOpen(true)}
         onRenameSheet={handleRenameSheet}
         onDeleteSheet={handleDeleteSheet}
+        onReorderSheets={handleReorderSheets}
       />
 
       {/* Modals */}
