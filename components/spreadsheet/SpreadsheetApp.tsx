@@ -444,33 +444,56 @@ export function SpreadsheetApp() {
 
     pushUndoSnapshot();
 
-    // Optimistically update local state
+    // Optimistically update local state immediately with immutable row copies
     setActiveSheet((prev) => {
       if (!prev) return prev;
-      const existingMap = new Map<number, RowData>();
-      prev.rows.forEach((r, idx) => existingMap.set(idx, r));
+      const newRows = [...prev.rows];
 
       rows.forEach((r) => {
-        const orderKey = r.order ?? 0;
-        const exist = existingMap.get(orderKey);
         const incomingData = typeof r.data === "string" ? JSON.parse(r.data) : r.data || {};
-        if (exist) {
-          exist.data = { ...exist.data, ...incomingData };
-        } else {
-          existingMap.set(orderKey, {
-            id: r.id || `temp_${orderKey}`,
+        let targetIndex = -1;
+        if (r.id && !r.id.startsWith("temp_")) {
+          targetIndex = newRows.findIndex((row) => row.id === r.id);
+        }
+        if (targetIndex === -1 && r.order !== undefined) {
+          targetIndex = r.order;
+        }
+
+        if (targetIndex >= 0 && targetIndex < newRows.length) {
+          const exist = newRows[targetIndex];
+          newRows[targetIndex] = {
+            ...exist,
+            data: { ...exist.data, ...incomingData },
+          };
+        } else if (targetIndex >= newRows.length) {
+          newRows[targetIndex] = {
+            id: r.id || `temp_${targetIndex}`,
             sheetId: prev.id,
-            order: orderKey,
+            order: targetIndex,
             data: incomingData,
             styles: {},
             createdAt: new Date().toISOString(),
-          });
+          };
         }
       });
 
+      // Fill any gaps if paste extended past existing row length
+      for (let i = 0; i < newRows.length; i++) {
+        if (!newRows[i]) {
+          newRows[i] = {
+            id: `temp_${i}`,
+            sheetId: prev.id,
+            order: i,
+            data: {},
+            styles: {},
+            createdAt: new Date().toISOString(),
+          };
+        }
+      }
+
       return {
         ...prev,
-        rows: Array.from(existingMap.values()).sort((a, b) => a.order - b.order),
+        rows: newRows,
       };
     });
 
@@ -492,11 +515,19 @@ export function SpreadsheetApp() {
       if (data.rows) {
         setActiveSheet((prev) => {
           if (!prev) return prev;
-          const map = new Map<number, RowData>();
-          data.rows.forEach((r: RowData) => map.set(r.order, r));
+          const idMap = new Map<string, RowData>();
+          const orderMap = new Map<number, RowData>();
+          data.rows.forEach((r: RowData) => {
+            if (r.id && !r.id.startsWith("temp_")) idMap.set(r.id, r);
+            if (r.order !== undefined) orderMap.set(r.order, r);
+          });
           return {
             ...prev,
-            rows: prev.rows.map((r) => map.get(r.order) || r),
+            rows: prev.rows.map((r, idx) => {
+              if (r.id && idMap.has(r.id)) return idMap.get(r.id)!;
+              if (orderMap.has(idx)) return orderMap.get(idx)!;
+              return r;
+            }),
           };
         });
       }

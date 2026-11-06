@@ -162,6 +162,10 @@ const GridCell = ({
           value={editValue}
           onChange={(e) => onEditValueChange?.(e.target.value)}
           onBlur={onCommitEdit}
+          onPaste={(e) => {
+            // Stop input paste from bubbling up to grid multi-cell handler
+            e.stopPropagation();
+          }}
           className="absolute inset-0 w-full h-full px-2 text-xs bg-white text-gray-900 font-medium border-2 border-blue-600 outline-none z-20 select-text"
         />
       ) : col.type === "dropdown" ? (
@@ -218,7 +222,23 @@ const GridCell = ({
   );
 };
 
-const MemoizedGridCell = React.memo(GridCell);
+const MemoizedGridCell = React.memo(GridCell, (prev, next) => {
+  // Direct value check: re-render immediately when cell value changes
+  if (prev.value !== next.value) return false;
+  if (prev.isActive !== next.isActive) return false;
+  if (prev.isSelected !== next.isSelected) return false;
+  if (prev.isEditing !== next.isEditing) return false;
+  if (next.isEditing && prev.editValue !== next.editValue) return false;
+  if (prev.isMultiCell !== next.isMultiCell) return false;
+  if (prev.isTopEdge !== next.isTopEdge) return false;
+  if (prev.isBottomEdge !== next.isBottomEdge) return false;
+  if (prev.isLeftEdge !== next.isLeftEdge) return false;
+  if (prev.isRightEdge !== next.isRightEdge) return false;
+  if (prev.isBottomRightCorner !== next.isBottomRightCorner) return false;
+  if (prev.cellStyle !== next.cellStyle) return false;
+  if (prev.col !== next.col) return false;
+  return true;
+});
 
 // ==========================================
 // 2. MEMOIZED GRID ROW (Skips Untouched Rows)
@@ -350,6 +370,8 @@ const GridRow = ({
 const MemoizedGridRow = React.memo(GridRow, (prev, next) => {
   if (prev.serialNumber !== next.serialNumber) return false;
   if (prev.row !== next.row) return false;
+  if (prev.row.data !== next.row.data) return false;
+  if (prev.row.styles !== next.row.styles) return false;
   if (prev.columns !== next.columns) return false;
   if (prev.isRowSelected !== next.isRowSelected) return false;
 
@@ -1235,10 +1257,18 @@ export function SpreadsheetGrid({
   // Multi-cell Copy & Paste (Ctrl+C / Ctrl+V) - Excel & Google Sheets compatible
   const handlePaste = useCallback(
     async (e: React.ClipboardEvent) => {
-      if (editingCell) return;
-      if (!activeCell) return;
+      // If user is actively typing inside an input/textarea (like column rename or cell edit), let the input handle it naturally
+      const target = e.target as HTMLElement;
+      const isInput = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+      if (editingCell && isInput) {
+        return;
+      }
 
+      // Explicitly prevent browser default action and stop bubbling to eliminate page reloads and DOM glitches
       e.preventDefault();
+      e.stopPropagation();
+
+      if (!activeCell) return;
       const clipboardText = e.clipboardData.getData("text/plain");
       if (!clipboardText) return;
 
