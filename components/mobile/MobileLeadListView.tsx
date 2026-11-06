@@ -1,18 +1,21 @@
 "use client";
 
 import React, { useMemo } from "react";
-import { SheetDetail, RowData } from "@/lib/types";
+import { SheetDetail, RowData, ColumnDef } from "@/lib/types";
 import {
   isValidLead,
   getLeadSource,
+  getLeadStatus,
+  isUnattendedLead,
   rowMatchesStatusFilter,
   rowMatchesDateFilter,
   formatDateDisplay,
 } from "@/lib/leads";
-import { SOURCE_COLORS } from "@/lib/defaults";
+import { SOURCE_COLORS, STATUS_COLORS, DEFAULT_FOLLOWUP_OPTIONS } from "@/lib/defaults";
 import {
   Phone,
   ChevronRight,
+  ChevronDown,
   Plus,
   Users,
   Search,
@@ -33,6 +36,209 @@ function formatAddedDate(createdAt?: string | Date | null): string {
   return `${d.getDate()} ${months[d.getMonth()]}`;
 }
 
+interface MobileLeadCardProps {
+  lead: RowData;
+  columns: ColumnDef[];
+  onEditLead: (row: RowData) => void;
+  onUpdateCell?: (rowId: string, columnId: string, value: string, order?: number) => Promise<void>;
+}
+
+const MobileLeadCard = ({
+  lead,
+  columns,
+  onEditLead,
+  onUpdateCell,
+}: MobileLeadCardProps) => {
+  const nameCol = columns.find((c) => c.id === "col_name") || columns[4];
+  const numberCol = columns.find((c) => c.id === "col_number") || columns[5];
+  const nameKey = nameCol ? nameCol.id : "col_name";
+  const numberKey = numberCol ? numberCol.id : "col_number";
+  const name = lead.data[nameKey] || "Unnamed Lead";
+  const number = lead.data[numberKey] || "No Phone Number";
+  const initial = name.charAt(0).toUpperCase() || "?";
+
+  const projectCol = columns.find(
+    (c) => c.id === "col_project_name" || c.name.toLowerCase().includes("project")
+  );
+  const projectName =
+    (projectCol ? lead.data[projectCol.id] : null) ||
+    lead.data.col_project_name ||
+    lead.data["Project Name"] ||
+    lead.data["project_name"] ||
+    null;
+
+  const leadSource = getLeadSource(lead.data);
+  const sourceStyle = leadSource ? SOURCE_COLORS[leadSource] : null;
+  const addedDate = formatAddedDate(lead.createdAt);
+
+  // Status tracking: synchronously derived from lead data and column definitions
+  const currentStatus = getLeadStatus(lead.data, columns);
+  const isUnattended = isUnattendedLead(lead.data, columns);
+  const statusColors = currentStatus !== "Unassigned" ? STATUS_COLORS[currentStatus] : null;
+
+  // Target follow-up column for status updates (defaulting to col_followup_1)
+  const followupCol =
+    columns.find(
+      (c) =>
+        c.type === "dropdown" &&
+        (c.id.includes("followup") || c.name.toLowerCase().includes("follow up")) &&
+        !c.id.includes("date") &&
+        !c.name.toLowerCase().includes("date")
+    ) || { id: "col_followup_1", name: "1st Follow Up", options: DEFAULT_FOLLOWUP_OPTIONS };
+
+  const followupOptions =
+    followupCol.options && followupCol.options.length > 0
+      ? followupCol.options
+      : DEFAULT_FOLLOWUP_OPTIONS;
+
+  return (
+    <div
+      onClick={() => onEditLead(lead)}
+      className="bg-white rounded-xl px-3 py-2 sm:px-3.5 sm:py-2.5 border border-slate-200 shadow-2xs hover:shadow-xs active:bg-slate-50 transition-all cursor-pointer select-none"
+    >
+      <div className="flex items-center gap-2.5">
+        {/* Left: Compact Avatar Initial */}
+        <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-slate-900 to-slate-800 text-amber-400 font-bold text-xs flex items-center justify-center shrink-0 shadow-inner border border-slate-700">
+          {initial}
+        </div>
+
+        {/* Center: Main Content (3 rows) */}
+        <div className="min-w-0 flex-1 flex flex-col gap-1 leading-tight">
+          {/* 1. Top Row: Strictly Lead Name & Status Dropdown / Badge */}
+          <div className="flex items-center justify-between gap-1.5 min-w-0">
+            <h4 className="text-sm font-bold text-slate-900 truncate leading-tight" title={name}>
+              {name}
+            </h4>
+
+            {/* Quick Status Dropdown Pill: Triggers unified onUpdateCell handler */}
+            <div
+              className="relative inline-flex items-center shrink-0"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span
+                className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border flex items-center gap-1 shadow-2xs select-none transition-colors ${
+                  isUnattended || currentStatus === "Unassigned"
+                    ? "bg-amber-50 text-amber-900 border-amber-300"
+                    : statusColors
+                    ? `${statusColors.bg} ${statusColors.text} ${statusColors.border}`
+                    : "bg-slate-100 text-slate-700 border-slate-300"
+                }`}
+              >
+                <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
+                <span className="truncate max-w-[95px] sm:max-w-[130px]">
+                  {isUnattended || currentStatus === "Unassigned" ? "Unattended" : currentStatus}
+                </span>
+                <ChevronDown className="h-2.5 w-2.5 opacity-60 shrink-0" />
+              </span>
+
+              {onUpdateCell && (
+                <select
+                  value={!isUnattended && currentStatus !== "Unassigned" ? currentStatus : ""}
+                  onChange={(e) => {
+                    e.stopPropagation();
+                    const newStatus = e.target.value;
+                    onUpdateCell(lead.id, followupCol.id, newStatus, lead.order);
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="absolute inset-0 w-full h-full opacity-0 cursor-pointer text-xs"
+                  title="Tap to change follow-up status"
+                >
+                  <option value="">Unattended (Clear status)</option>
+                  {followupOptions.map((opt) => (
+                    <option key={opt} value={opt}>
+                      {opt}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          </div>
+
+          {/* 2. Middle Row: Phone Number + Project Name (left) & Call Button (right) */}
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
+              <div className="flex items-center gap-1 font-mono text-[11px] sm:text-xs text-slate-600 shrink-0">
+                <Phone className="h-3 w-3 text-slate-400 shrink-0" />
+                <span>{number}</span>
+              </div>
+              {projectName && (
+                <>
+                  <span className="text-slate-300 shrink-0">•</span>
+                  <span
+                    className="text-[11px] sm:text-xs text-slate-600 font-medium truncate"
+                    title={`Project: ${projectName}`}
+                  >
+                    {projectName}
+                  </span>
+                </>
+              )}
+            </div>
+
+            {number && number !== "No Phone Number" && (
+              <a
+                href={`tel:${number}`}
+                onClick={(e) => e.stopPropagation()}
+                className="h-8.5 w-8.5 sm:h-9 sm:w-9 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 flex items-center justify-center border border-emerald-300 transition-all shrink-0 shadow-xs active:scale-90"
+                title={`Call ${number}`}
+                aria-label={`Call ${number}`}
+              >
+                <Phone className="h-4.5 w-4.5 text-emerald-600 fill-emerald-100/40" />
+              </a>
+            )}
+          </div>
+
+          {/* 3. Bottom Row: Source + Date Only */}
+          {(leadSource || addedDate) && (
+            <div className="flex items-center justify-between gap-2 text-[10px] min-w-0 leading-tight pt-1 border-t border-slate-100">
+              {leadSource ? (
+                <span
+                  className={`px-2 py-0.5 rounded-full font-semibold border flex items-center gap-1 shadow-2xs truncate max-w-[55%] ${
+                    sourceStyle?.bg || "bg-indigo-50"
+                  } ${sourceStyle?.text || "text-indigo-800 font-semibold"} ${
+                    sourceStyle?.border || "border-indigo-200"
+                  }`}
+                  title={`Lead Source: ${leadSource}`}
+                >
+                  <Sparkles className="h-2.5 w-2.5 text-amber-500 shrink-0" />
+                  <span className="truncate">{leadSource}</span>
+                </span>
+              ) : (
+                <span />
+              )}
+
+              {addedDate && (
+                <span
+                  className="text-slate-400 font-medium flex items-center gap-1 shrink-0 ml-auto whitespace-nowrap"
+                  title={lead.createdAt ? `Lead added on ${new Date(lead.createdAt).toLocaleString("en-IN")}` : undefined}
+                >
+                  <Calendar className="h-2.5 w-2.5 text-slate-400" />
+                  <span>Added {addedDate}</span>
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// Strict memoization checking lead object and data references for zero-lag reactivity
+const MemoizedMobileLeadCard = React.memo(
+  MobileLeadCard,
+  (prev, next) => {
+    if (prev.lead !== next.lead) return false;
+    if (prev.lead.data !== next.lead.data) return false;
+    if (prev.lead.id !== next.lead.id) return false;
+    if (prev.lead.updatedAt !== next.lead.updatedAt) return false;
+    if (prev.lead.createdAt !== next.lead.createdAt) return false;
+    if (prev.columns !== next.columns) return false;
+    if (prev.onUpdateCell !== next.onUpdateCell) return false;
+    if (prev.onEditLead !== next.onEditLead) return false;
+    return true;
+  }
+);
+
 interface MobileLeadListViewProps {
   sheet: SheetDetail;
   searchQuery: string;
@@ -42,6 +248,8 @@ interface MobileLeadListViewProps {
   onSelectDate?: (date: string | null) => void;
   onEditLead: (row: RowData) => void;
   onAddNewLead: () => void;
+  onUpdateCell?: (rowId: string, columnId: string, value: string, order?: number) => Promise<void>;
+  onUpdateLead?: (rowId: string, data: Record<string, string>, order?: number) => Promise<void>;
 }
 
 export function MobileLeadListView({
@@ -53,6 +261,7 @@ export function MobileLeadListView({
   onSelectDate,
   onEditLead,
   onAddNewLead,
+  onUpdateCell,
 }: MobileLeadListViewProps) {
   // Filter only rows that have actual valid lead data (name, number, project, or other non-empty field)
   // in their default sequential order as returned from the database
@@ -168,117 +377,15 @@ export function MobileLeadListView({
             )}
           </div>
         ) : (
-          leads.map((row) => {
-            const nameCol = sheet.columns.find((c) => c.id === "col_name") || sheet.columns[4];
-            const numberCol = sheet.columns.find((c) => c.id === "col_number") || sheet.columns[5];
-            const nameKey = nameCol ? nameCol.id : "col_name";
-            const numberKey = numberCol ? numberCol.id : "col_number";
-            const name = row.data[nameKey] || "Unnamed Lead";
-            const number = row.data[numberKey] || "No Phone Number";
-            const initial = name.charAt(0).toUpperCase() || "?";
-
-            const projectCol = sheet.columns.find((c) => c.id === "col_project_name" || c.name.toLowerCase().includes("project"));
-            const projectName =
-              (projectCol ? row.data[projectCol.id] : null) ||
-              row.data.col_project_name ||
-              row.data["Project Name"] ||
-              row.data["project_name"] ||
-              null;
-
-            const leadSource = getLeadSource(row.data);
-            const sourceStyle = leadSource ? SOURCE_COLORS[leadSource] : null;
-            const addedDate = formatAddedDate(row.createdAt);
-
-            return (
-              <div
-                key={row.id}
-                onClick={() => onEditLead(row)}
-                className="bg-white rounded-xl px-3 py-2 sm:px-3.5 sm:py-2.5 border border-slate-200 shadow-2xs hover:shadow-xs active:bg-slate-50 transition-all cursor-pointer select-none"
-              >
-                <div className="flex items-center gap-2.5">
-                  {/* Left: Compact Avatar Initial */}
-                  <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-slate-900 to-slate-800 text-amber-400 font-bold text-xs flex items-center justify-center shrink-0 shadow-inner border border-slate-700">
-                    {initial}
-                  </div>
-
-                  {/* Center: Main Content (3 rows) */}
-                  <div className="min-w-0 flex-1 flex flex-col gap-1 leading-tight">
-                    {/* 1. Top Row: Strictly Lead Name Only & Chevron */}
-                    <div className="flex items-center justify-between gap-1.5 min-w-0">
-                      <h4 className="text-sm font-bold text-slate-900 truncate leading-tight" title={name}>
-                        {name}
-                      </h4>
-                      <ChevronRight className="h-4 w-4 text-slate-300 shrink-0" />
-                    </div>
-
-                    {/* 2. Middle Row: Phone Number + Project Name (left) & Call Button (right) */}
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5 min-w-0 flex-1 overflow-hidden">
-                        <div className="flex items-center gap-1 font-mono text-[11px] sm:text-xs text-slate-600 shrink-0">
-                          <Phone className="h-3 w-3 text-slate-400 shrink-0" />
-                          <span>{number}</span>
-                        </div>
-                        {projectName && (
-                          <>
-                            <span className="text-slate-300 shrink-0">•</span>
-                            <span
-                              className="text-[11px] sm:text-xs text-slate-600 font-medium truncate"
-                              title={`Project: ${projectName}`}
-                            >
-                              {projectName}
-                            </span>
-                          </>
-                        )}
-                      </div>
-
-                      {number && number !== "No Phone Number" && (
-                        <a
-                          href={`tel:${number}`}
-                          onClick={(e) => e.stopPropagation()}
-                          className="h-8.5 w-8.5 sm:h-9 sm:w-9 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-700 flex items-center justify-center border border-emerald-300 transition-all shrink-0 shadow-xs active:scale-90"
-                          title={`Call ${number}`}
-                          aria-label={`Call ${number}`}
-                        >
-                          <Phone className="h-4.5 w-4.5 text-emerald-600 fill-emerald-100/40" />
-                        </a>
-                      )}
-                    </div>
-
-                    {/* 3. Bottom Row: Source + Date Only */}
-                    {(leadSource || addedDate) && (
-                      <div className="flex items-center justify-between gap-2 text-[10px] min-w-0 leading-tight pt-1 border-t border-slate-100">
-                        {leadSource ? (
-                          <span
-                            className={`px-2 py-0.5 rounded-full font-semibold border flex items-center gap-1 shadow-2xs truncate max-w-[55%] ${
-                              sourceStyle?.bg || "bg-indigo-50"
-                            } ${sourceStyle?.text || "text-indigo-800 font-semibold"} ${
-                              sourceStyle?.border || "border-indigo-200"
-                            }`}
-                            title={`Lead Source: ${leadSource}`}
-                          >
-                            <Sparkles className="h-2.5 w-2.5 text-amber-500 shrink-0" />
-                            <span className="truncate">{leadSource}</span>
-                          </span>
-                        ) : (
-                          <span />
-                        )}
-
-                        {addedDate && (
-                          <span
-                            className="text-slate-400 font-medium flex items-center gap-1 shrink-0 ml-auto whitespace-nowrap"
-                            title={row.createdAt ? `Lead added on ${new Date(row.createdAt).toLocaleString("en-IN")}` : undefined}
-                          >
-                            <Calendar className="h-2.5 w-2.5 text-slate-400" />
-                            <span>Added {addedDate}</span>
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })
+          leads.map((row) => (
+            <MemoizedMobileLeadCard
+              key={row.id}
+              lead={row}
+              columns={sheet.columns}
+              onEditLead={onEditLead}
+              onUpdateCell={onUpdateCell}
+            />
+          ))
         )}
       </div>
 

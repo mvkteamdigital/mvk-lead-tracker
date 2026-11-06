@@ -801,12 +801,112 @@ export function SpreadsheetApp() {
   };
 
   // 14. Save lead from mobile form modal (Supports Add Lead & Edit Lead)
+  const handleUpdateLead = async (
+    rowId: string,
+    updatedData: Record<string, string>,
+    order?: number
+  ) => {
+    if (!activeSheet) return;
+
+    pushUndoSnapshot();
+
+    const rowOrder = order !== undefined ? order : activeCell?.rowIdx ?? 0;
+
+    // Optimistically update local state immediately for zero-lag UI
+    setActiveSheet((prev) => {
+      if (!prev) return prev;
+      let targetIndex = -1;
+
+      // 1. Strictly match by unique database ID first
+      if (rowId && !rowId.startsWith("temp_")) {
+        targetIndex = prev.rows.findIndex((r) => r.id === rowId);
+      }
+      // 2. If rowId is temp or not found by real id, match by sequential order
+      if (targetIndex === -1 && order !== undefined) {
+        targetIndex = prev.rows.findIndex((r) => r.order === order);
+      }
+      // 3. Fallback match by temp id
+      if (targetIndex === -1 && rowId && rowId.startsWith("temp_")) {
+        targetIndex = prev.rows.findIndex((r) => r.id === rowId);
+      }
+
+      if (targetIndex !== -1) {
+        const existing = prev.rows[targetIndex];
+        const nextRows = [...prev.rows];
+        nextRows[targetIndex] = {
+          ...existing,
+          data: { ...existing.data, ...updatedData },
+        };
+        return {
+          ...prev,
+          rows: nextRows,
+        };
+      }
+
+      // New row created for blank row index
+      const newRow: RowData = {
+        id: rowId,
+        sheetId: prev.id,
+        order: rowOrder,
+        data: updatedData,
+        styles: {},
+        createdAt: new Date().toISOString(),
+      };
+      return {
+        ...prev,
+        rows: [...prev.rows, newRow],
+      };
+    });
+
+    setSavingStatus("saving");
+
+    try {
+      const res = await fetch(`/api/sheets/${activeSheet.id}/rows`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          rows: [{ id: rowId.startsWith("temp_") ? undefined : rowId, order: rowOrder, data: updatedData }],
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        if (res.status === 409) {
+          alert(`⚠️ ${errData.error || "Duplicate Lead detected."}`);
+        }
+        await fetchActiveSheetDetail(activeSheet.id);
+        throw new Error(errData.error || "Failed to save lead");
+      }
+
+      const data = await res.json();
+      if (data.rows && data.rows[0]) {
+        const confirmedRow = data.rows[0];
+        setActiveSheet((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            rows: prev.rows.map((r) =>
+              r.id === rowId || r.id === confirmedRow.id
+                ? { ...r, ...confirmedRow, data: { ...r.data, ...confirmedRow.data } }
+                : r
+            ),
+          };
+        });
+      }
+      setSavingStatus("saved");
+    } catch (err) {
+      console.error(err);
+      setSavingStatus("error");
+      throw err;
+    }
+  };
+
   const handleSaveLeadFromModal = async (data: Record<string, string>, rowId?: string) => {
     if (!activeSheet) return;
 
     if (rowId && !rowId.startsWith("temp_")) {
-      // Update existing lead
-      await handleBatchUpdateRows([{ id: rowId, data }]);
+      // Update existing lead using unified handler
+      await handleUpdateLead(rowId, data);
     } else {
       // Create new lead in database
       const existingOrders = activeSheet.rows.map((r) => r.order ?? 0);
@@ -1004,6 +1104,8 @@ export function SpreadsheetApp() {
                   setEditingLeadForModal(null);
                   setIsLeadFormModalOpen(true);
                 }}
+                onUpdateCell={handleUpdateCell}
+                onUpdateLead={handleUpdateLead}
               />
             </div>
 
