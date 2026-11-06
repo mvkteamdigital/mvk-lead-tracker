@@ -145,15 +145,8 @@ export function getLeadStatus(
 
   for (const k of keysToCheck) {
     const val = rowData[k];
-    if (val && typeof val === "string") {
-      const trimmed = val.trim();
-      if (
-        trimmed &&
-        !trimmed.toLowerCase().includes("select") &&
-        !trimmed.toLowerCase().includes("choose")
-      ) {
-        return trimmed;
-      }
+    if (val !== undefined && val !== null && !isFollowupEmpty(val)) {
+      return typeof val === "string" ? val.trim() : String(val).trim();
     }
   }
 
@@ -198,32 +191,48 @@ export function getLeadFollowupDate(
 
 /**
  * Helper to determine if a follow-up value is empty or just a placeholder.
+ * Strictly considers null, undefined, empty string, whitespace-only, hyphens,
+ * and any placeholder phrases (e.g. "Select status...", "Choose...", "Unassigned") as empty.
  */
 export function isFollowupEmpty(val: any): boolean {
   if (val === undefined || val === null) return true;
   const str = typeof val === "string" ? val.trim() : String(val).trim();
   if (!str) return true;
+
   const lower = str.toLowerCase();
-  return (
-    lower.startsWith("select") ||
-    lower.startsWith("choose") ||
-    lower === "-" ||
-    lower === "--" ||
-    lower === "---" ||
-    lower === "none" ||
-    lower === "n/a" ||
-    lower === "na" ||
-    lower === "null" ||
-    lower === "undefined"
-  );
+
+  // Strip leading/trailing hyphens, dashes, bullets, whitespace
+  const stripped = lower.replace(/^[-–—•\s]+|[-–—•\s]+$/g, "").trim();
+  if (!stripped) return true;
+
+  // Placeholder phrases (e.g. "Select status...", "-- Select Status --", "Choose option", etc.)
+  if (
+    stripped.includes("select") ||
+    stripped.includes("choose") ||
+    stripped === "none" ||
+    stripped === "n/a" ||
+    stripped === "na" ||
+    stripped === "null" ||
+    stripped === "undefined" ||
+    stripped === "unassigned" ||
+    stripped === "empty" ||
+    stripped === "nil" ||
+    stripped === "not attended" ||
+    stripped === "unattended"
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
  * Checks whether a lead is considered "Unattended".
  * STRICT LOGIC: A lead is considered "Unattended" ONLY if *every single*
  * follow-up status field (1st Follow Up, 2nd Follow Up, 3rd Follow Up, and 4th Follow Up)
- * is simultaneously null, undefined, or set to the default empty state (e.g., "Select status...").
- * If even one of these follow-up fields has a value, the lead is NO LONGER considered unattended.
+ * is simultaneously empty, null, undefined, or set to a placeholder (e.g., "Select status...").
+ *
+ * If even ONE follow-up field has a valid status value, the lead is NO LONGER unattended (returns false).
  */
 export function isUnattendedLead(
   rowData: Record<string, any> | undefined | null,
@@ -238,26 +247,6 @@ export function isUnattendedLead(
     "col_followup_2",
     "col_followup_3",
     "col_followup_4",
-  ]);
-
-  if (columns && Array.isArray(columns)) {
-    columns.forEach((c) => {
-      const idLower = c.id.toLowerCase();
-      const nameLower = c.name.toLowerCase();
-      if (
-        c.type === "dropdown" &&
-        (idLower.includes("followup") || nameLower.includes("follow up")) &&
-        !idLower.includes("date") &&
-        !nameLower.includes("date")
-      ) {
-        followupKeys.add(c.id);
-        followupKeys.add(c.name);
-      }
-    });
-  }
-
-  // Also include standard named keys
-  [
     "1st Follow Up",
     "2nd Follow Up",
     "3rd Follow Up",
@@ -266,13 +255,71 @@ export function isUnattendedLead(
     "2nd follow up",
     "3rd follow up",
     "4th follow up",
-  ].forEach((k) => followupKeys.add(k));
+    "col_followup_1_status",
+    "col_followup_2_status",
+    "col_followup_3_status",
+    "col_followup_4_status",
+    "followup_1",
+    "followup_2",
+    "followup_3",
+    "followup_4",
+    "Follow Up 1",
+    "Follow Up 2",
+    "Follow Up 3",
+    "Follow Up 4",
+    "Follow-up 1",
+    "Follow-up 2",
+    "Follow-up 3",
+    "Follow-up 4",
+    "follow_up_1",
+    "follow_up_2",
+    "follow_up_3",
+    "follow_up_4",
+  ]);
 
+  if (columns && Array.isArray(columns)) {
+    columns.forEach((c) => {
+      const idLower = c.id.toLowerCase();
+      const nameLower = c.name.toLowerCase();
+      const isDate = idLower.includes("date") || nameLower.includes("date");
+      if (isDate) return;
+
+      if (
+        c.type === "dropdown" &&
+        (idLower.includes("followup") ||
+          idLower.includes("follow_up") ||
+          idLower.includes("follow-up") ||
+          nameLower.includes("follow up") ||
+          nameLower.includes("follow-up") ||
+          nameLower.includes("followup"))
+      ) {
+        followupKeys.add(c.id);
+        followupKeys.add(c.name);
+      }
+    });
+  }
+
+  // Also include any key present on rowData that looks like a follow-up status key
+  for (const k of Object.keys(rowData)) {
+    const kLower = k.toLowerCase();
+    if (
+      !kLower.includes("date") &&
+      (kLower.includes("followup") ||
+        kLower.includes("follow up") ||
+        kLower.includes("follow-up"))
+    ) {
+      followupKeys.add(k);
+    }
+  }
+
+  // Check all follow-up keys. If even ONE follow-up field has a valid status, it is NOT unattended.
   for (const k of Array.from(followupKeys)) {
-    const val = rowData[k];
-    if (!isFollowupEmpty(val)) {
-      // If even ONE follow-up field has a value, it is NO LONGER unattended!
-      return false;
+    if (k in rowData) {
+      const val = rowData[k];
+      if (!isFollowupEmpty(val)) {
+        // At least one follow-up field is active!
+        return false;
+      }
     }
   }
 

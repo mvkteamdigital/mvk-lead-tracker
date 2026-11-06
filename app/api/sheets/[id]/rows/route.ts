@@ -259,46 +259,53 @@ export async function PUT(req: Request, { params }: Params) {
         }
       }
 
+      let existing = null;
       if (body.rowId && !body.rowId.startsWith("temp_")) {
-        const existing = await prisma.row.findUnique({
+        existing = await prisma.row.findUnique({
           where: { id: body.rowId },
         });
+      }
 
-        if (existing && existing.sheetId === sheetId) {
-          const currentData = JSON.parse(existing.data || "{}");
-          const oldName = getLeadName(currentData);
-          currentData[body.columnId] = body.value;
-          const newName = getLeadName(currentData);
-          const isNameChanged = isNameFieldKey(body.columnId) && oldName !== newName;
+      if (!existing && body.order !== undefined) {
+        existing = await prisma.row.findFirst({
+          where: { sheetId, order: body.order },
+        });
+      }
 
-          const phone = getRowPhoneNumber(currentData);
-          const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
+      if (existing && existing.sheetId === sheetId) {
+        const currentData = JSON.parse(existing.data || "{}");
+        const oldName = getLeadName(currentData);
+        currentData[body.columnId] = body.value;
+        const newName = getLeadName(currentData);
+        const isNameChanged = isNameFieldKey(body.columnId) && oldName !== newName;
 
-          const updated = await prisma.row.update({
-            where: { id: body.rowId },
-            data: {
-              data: JSON.stringify(currentData),
-              phoneNumber: phoneExact || null,
-              phoneDigits: phoneDigits || null,
-              ...(isNameChanged ? { nameModifiedAt: new Date() } : {}),
-              ...extractFollowupDates(currentData),
-            },
-          });
+        const phone = getRowPhoneNumber(currentData);
+        const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
 
-          return NextResponse.json({
-            success: true,
-            row: {
-              id: updated.id,
-              sheetId: updated.sheetId,
-              order: updated.order,
-              data: currentData,
-              styles: JSON.parse(updated.styles || "{}"),
-              nameModifiedAt: (updated.nameModifiedAt || updated.createdAt).toISOString(),
-              createdAt: updated.createdAt.toISOString(),
-              updatedAt: updated.updatedAt.toISOString(),
-            },
-          });
-        }
+        const updated = await prisma.row.update({
+          where: { id: existing.id },
+          data: {
+            data: JSON.stringify(currentData),
+            phoneNumber: phoneExact || null,
+            phoneDigits: phoneDigits || null,
+            ...(isNameChanged ? { nameModifiedAt: new Date() } : {}),
+            ...extractFollowupDates(currentData),
+          },
+        });
+
+        return NextResponse.json({
+          success: true,
+          row: {
+            id: updated.id,
+            sheetId: updated.sheetId,
+            order: updated.order,
+            data: currentData,
+            styles: JSON.parse(updated.styles || "{}"),
+            nameModifiedAt: (updated.nameModifiedAt || updated.createdAt).toISOString(),
+            createdAt: updated.createdAt.toISOString(),
+            updatedAt: updated.updatedAt.toISOString(),
+          },
+        });
       }
 
       // If row does not exist in DB yet (editing one of the 1,000 blank rows)
@@ -532,3 +539,6 @@ export async function DELETE(req: Request, { params }: Params) {
     );
   }
 }
+
+// Export PATCH handler mapping directly to PUT for single-cell and batch updates
+export const PATCH = PUT;

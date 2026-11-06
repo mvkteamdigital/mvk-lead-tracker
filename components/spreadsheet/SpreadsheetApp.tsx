@@ -343,9 +343,11 @@ export function SpreadsheetApp() {
   // Get active cell value
   const getActiveCellValue = (): string => {
     if (!activeSheet || !activeCell) return "";
-    const row = activeSheet.rows.find(
-      (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
-    );
+    const row =
+      activeSheet.rows[activeCell.rowIdx] ||
+      activeSheet.rows.find(
+        (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
+      );
     if (!row) return "";
     return row.data[activeCell.colId] || "";
   };
@@ -353,9 +355,11 @@ export function SpreadsheetApp() {
   // Get active cell style
   const getActiveCellStyle = (): CellStyle => {
     if (!activeSheet || !activeCell) return {};
-    const row = activeSheet.rows.find(
-      (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
-    );
+    const row =
+      activeSheet.rows[activeCell.rowIdx] ||
+      activeSheet.rows.find(
+        (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
+      );
     if (!row || !row.styles) return {};
     return row.styles[activeCell.colId] || {};
   };
@@ -371,20 +375,35 @@ export function SpreadsheetApp() {
     // Optimistically update local state immediately for zero-lag UI
     setActiveSheet((prev) => {
       if (!prev) return prev;
-      const existing = prev.rows.find((r) => r.id === rowId || (order !== undefined && r.order === order));
-      if (existing) {
+      let targetIndex = -1;
+
+      // 1. Strictly match by unique database ID first
+      if (rowId && !rowId.startsWith("temp_")) {
+        targetIndex = prev.rows.findIndex((r) => r.id === rowId);
+      }
+      // 2. If rowId is temp or not found by real id, match by sequential order
+      if (targetIndex === -1 && order !== undefined) {
+        targetIndex = prev.rows.findIndex((r) => r.order === order);
+      }
+      // 3. Fallback match by temp id
+      if (targetIndex === -1 && rowId && rowId.startsWith("temp_")) {
+        targetIndex = prev.rows.findIndex((r) => r.id === rowId);
+      }
+
+      if (targetIndex !== -1) {
+        const existing = prev.rows[targetIndex];
+        const nextRows = [...prev.rows];
+        nextRows[targetIndex] = {
+          ...existing,
+          data: { ...existing.data, [columnId]: value },
+        };
         return {
           ...prev,
-          rows: prev.rows.map((r) =>
-            r.id === existing.id
-              ? {
-                  ...r,
-                  data: { ...r.data, [columnId]: value },
-                }
-              : r
-          ),
+          rows: nextRows,
         };
       }
+
+      // New row created for blank row index
       const newRow: RowData = {
         id: rowId,
         sheetId: prev.id,
@@ -422,12 +441,22 @@ export function SpreadsheetApp() {
         throw new Error(errData.error || "Failed to save cell");
       }
       const data = await res.json();
-      if (data.row && rowId.startsWith("temp_")) {
+      if (data.row) {
         setActiveSheet((prev) => {
           if (!prev) return prev;
+          const targetRowId = data.row.id;
           return {
             ...prev,
-            rows: prev.rows.map((r) => (r.id === rowId ? data.row : r)),
+            rows: prev.rows.map((r) => {
+              if (r.id === rowId || r.id === targetRowId) {
+                return {
+                  ...r,
+                  ...data.row,
+                  data: { ...r.data, ...data.row.data },
+                };
+              }
+              return r;
+            }),
           };
         });
       }
@@ -456,7 +485,7 @@ export function SpreadsheetApp() {
           targetIndex = newRows.findIndex((row) => row.id === r.id);
         }
         if (targetIndex === -1 && r.order !== undefined) {
-          targetIndex = r.order;
+          targetIndex = newRows.findIndex((row) => row.order === r.order);
         }
 
         if (targetIndex >= 0 && targetIndex < newRows.length) {
@@ -525,7 +554,7 @@ export function SpreadsheetApp() {
             ...prev,
             rows: prev.rows.map((r, idx) => {
               if (r.id && idMap.has(r.id)) return idMap.get(r.id)!;
-              if (orderMap.has(idx)) return orderMap.get(idx)!;
+              if (r.order !== undefined && orderMap.has(r.order)) return orderMap.get(r.order)!;
               return r;
             }),
           };
@@ -918,9 +947,11 @@ export function SpreadsheetApp() {
           cellValue={getActiveCellValue()}
           onCellValueChange={(val) => {
             if (activeSheet && activeCell) {
-              const row = activeSheet.rows.find(
-                (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
-              );
+              const row =
+                activeSheet.rows[activeCell.rowIdx] ||
+                activeSheet.rows.find(
+                  (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
+                );
               handleUpdateCell(
                 row ? row.id : `temp_${activeCell.rowIdx}`,
                 activeCell.colId,
