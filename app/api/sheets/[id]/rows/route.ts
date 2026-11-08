@@ -203,12 +203,29 @@ export async function PUT(req: Request, { params }: Params) {
         if (body.rows.length > 0) {
           const rowsToInsert = body.rows.map((r: any, idx: number) => {
             const dataObj = typeof r.data === "string" ? JSON.parse(r.data || "{}") : (r.data || {});
+            let rowCreatedAt: Date | undefined = undefined;
+            if (r.createdAt) {
+              const d = new Date(r.createdAt);
+              if (!isNaN(d.getTime())) rowCreatedAt = d;
+            } else if (r.id && r.id.startsWith("c") && r.id.length >= 20) {
+              const ts = parseInt(r.id.substring(1, 9), 36);
+              if (!isNaN(ts) && ts > 1700000000000) rowCreatedAt = new Date(ts);
+            }
+
+            let rowNameModifiedAt: Date | undefined = undefined;
+            if (r.nameModifiedAt) {
+              const d = new Date(r.nameModifiedAt);
+              if (!isNaN(d.getTime())) rowNameModifiedAt = d;
+            }
+
             return {
               id: r.id && !r.id.startsWith("temp_") ? r.id : undefined,
               sheetId,
-              order: r.order !== undefined ? r.order : idx,
+              order: idx,
               data: JSON.stringify(dataObj),
               styles: typeof r.styles === "string" ? r.styles : JSON.stringify(r.styles || {}),
+              ...(rowCreatedAt ? { createdAt: rowCreatedAt } : {}),
+              ...(rowNameModifiedAt ? { nameModifiedAt: rowNameModifiedAt } : {}),
               ...extractFollowupDates(dataObj),
             };
           });

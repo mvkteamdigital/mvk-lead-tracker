@@ -2,7 +2,7 @@
 
 import React, { useRef } from "react";
 import { STATUS_COLORS, HARDCODED_STATUS_FILTERS } from "@/lib/defaults";
-import { formatDateDisplay } from "@/lib/leads";
+import { formatDateDisplay, toLocalYMD } from "@/lib/leads";
 import { Users, X, ChevronLeft, ChevronRight, Settings2, Calendar } from "lucide-react";
 
 interface StatusFilterBarProps {
@@ -95,9 +95,8 @@ export function StatusFilterBar({
           <button
             type="button"
             onClick={() => {
-              const today = new Date();
-              const ymd = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-              onSelectDate?.(ymd);
+              const todayYMD = toLocalYMD(new Date());
+              onSelectDate?.(todayYMD);
             }}
             className="text-[10px] font-bold text-amber-700 hover:text-amber-950 bg-amber-100 hover:bg-amber-200 px-1.5 py-0.5 rounded transition-colors cursor-pointer"
             title="Filter to leads added today"

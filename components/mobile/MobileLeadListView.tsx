@@ -11,6 +11,7 @@ import {
   rowMatchesStatusFilter,
   rowMatchesDateFilter,
   formatDateDisplay,
+  filterSheetRows,
 } from "@/lib/leads";
 import { SOURCE_COLORS, STATUS_COLORS, DEFAULT_FOLLOWUP_OPTIONS } from "@/lib/defaults";
 import {
@@ -312,25 +313,12 @@ export function MobileLeadListView({
   // Filter only rows that have actual valid lead data (name, number, project, or other non-empty field)
   // in their default sequential order as returned from the database
   const leads = useMemo(() => {
-    return sheet.rows.filter((r) => {
-      if (!isValidLead(r.data)) return false;
-
-      // Filter by date added if set
-      if (dateFilter && !rowMatchesDateFilter(r.createdAt, dateFilter)) {
-        return false;
-      }
-
-      if (statusFilter && !rowMatchesStatusFilter(r.data, statusFilter, sheet.columns)) {
-        return false;
-      }
-
-      if (!searchQuery.trim()) return true;
-      const q = searchQuery.toLowerCase();
-      return Object.values(r.data || {}).some((val) =>
-        String(val || "").toLowerCase().includes(q)
-      );
+    return filterSheetRows(sheet.rows, sheet.columns, {
+      dateFilter,
+      statusFilter,
+      searchQuery,
     });
-  }, [sheet.rows, searchQuery, statusFilter, dateFilter, sheet.columns]);
+  }, [sheet.rows, sheet.columns, searchQuery, statusFilter, dateFilter]);
 
   return (
     <div className="flex-1 flex flex-col bg-slate-100 overflow-y-auto relative pb-28">

@@ -380,7 +380,7 @@ export function getLeadName(rowData: Record<string, any> | undefined | null): st
  */
 export function rowMatchesStatusFilter(
   rowData: Record<string, any> | undefined | null,
-  statusFilter: string | null,
+  statusFilter: string | null | undefined,
   columns?: ColumnDef[]
 ): boolean {
   if (!statusFilter) return true;
@@ -459,67 +459,204 @@ export function getRowPhoneNumber(data: Record<string, any> | undefined | null):
 }
 
 /**
- * Normalizes a date input (Date object, ISO timestamp, or date string)
- * into a strict local YYYY-MM-DD string.
+ * Resolves the original Lead Creation / Added Date for a lead record.
+ * Evaluates ONLY the original lead creation date.
+ * It never uses updatedAt, last modified date, follow-up dates, or status modification dates.
+ *
+ * Ground truth hierarchy:
+ * 1. Immutable CUID timestamp embedded in row.id if valid CUID (e.g. cmvzh... => timestamp)
+ * 2. row.createdAt (if row.id is temp_ or not a CUID)
  */
-export function toLocalYMD(dateInput: string | Date | undefined | null): string {
-  if (!dateInput) return "";
+export function getLeadAddedDate(
+  rowOrCreatedAt: string | Date | RowData | Record<string, any> | undefined | null
+): Date | null {
+  if (!rowOrCreatedAt) return null;
 
-  // If already a strict YYYY-MM-DD string, return directly
-  if (typeof dateInput === "string") {
-    const trimmed = dateInput.trim();
-    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-      return trimmed;
+  if (rowOrCreatedAt instanceof Date) {
+    return isNaN(rowOrCreatedAt.getTime()) ? null : rowOrCreatedAt;
+  }
+
+  if (typeof rowOrCreatedAt === "object") {
+    const row = rowOrCreatedAt as any;
+
+    // 1. Immutable CUID timestamp embedded in row.id (c + 8-char base36 timestamp)
+    if (typeof row.id === "string" && row.id.startsWith("c") && row.id.length >= 20) {
+      const timePart = row.id.substring(1, 9);
+      const ts = parseInt(timePart, 36);
+      if (!isNaN(ts) && ts > 1700000000000 && ts < 2050000000000) {
+        return new Date(ts);
+      }
     }
+
+    // 2. Direct createdAt on row
+    if (row.createdAt) {
+      const d = new Date(row.createdAt);
+      return isNaN(d.getTime()) ? null : d;
+    }
+
+    return null;
   }
 
-  try {
-    const d = typeof dateInput === "string" ? new Date(dateInput) : dateInput;
-    if (isNaN(d.getTime())) return String(dateInput).trim();
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${year}-${month}-${day}`;
-  } catch {
-    return "";
+  if (typeof rowOrCreatedAt === "string") {
+    const trimmed = rowOrCreatedAt.trim();
+    if (!trimmed) return null;
+
+    if (trimmed.startsWith("c") && trimmed.length >= 20) {
+      const timePart = trimmed.substring(1, 9);
+      const ts = parseInt(timePart, 36);
+      if (!isNaN(ts) && ts > 1700000000000 && ts < 2050000000000) {
+        return new Date(ts);
+      }
+    }
+
+    const d = new Date(trimmed);
+    return isNaN(d.getTime()) ? null : d;
   }
+
+  return null;
 }
 
 /**
- * Checks whether a row's added date strictly matches the selected filter date on an exact calendar day.
- * Prevents older or newer leads from bleeding into the filtered view by strictly checking YYYY-MM-DD === selectedDate.
+ * Normalizes any date input into a strict YYYY-MM-DD string
+ * representing the exact calendar day in Indian Standard Time (Asia/Kolkata).
+ * Handles ISO timestamps, date-only strings (YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY),
+ * Date objects, timestamps, and null/missing dates.
+ */
+export function toLocalYMD(dateInput: string | Date | number | undefined | null): string {
+  if (!dateInput) return "";
+
+  if (typeof dateInput === "string") {
+    const trimmed = dateInput.trim();
+    if (!trimmed) return "";
+
+    // 1. If already strict YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return trimmed;
+    }
+
+    // 2. If DD-MM-YYYY or DD/MM/YYYY format (e.g. 08-11-2026)
+    const ddmmyyyy = trimmed.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/);
+    if (ddmmyyyy) {
+      return `${ddmmyyyy[3]}-${ddmmyyyy[2]}-${ddmmyyyy[1]}`;
+    }
+
+    // 3. If ISO string or parseable date string, format in IST (Asia/Kolkata)
+    const d = new Date(trimmed);
+    if (!isNaN(d.getTime())) {
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Kolkata",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(d);
+    }
+    return "";
+  }
+
+  let d: Date;
+  if (typeof dateInput === "number") {
+    d = new Date(dateInput);
+  } else {
+    d = dateInput;
+  }
+
+  if (isNaN(d.getTime())) return "";
+
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+/**
+ * Checks whether a row's original Added Date strictly matches the selected filter date
+ * on an exact calendar day in Indian Standard Time (Asia/Kolkata).
+ * Evaluates ONLY the original lead creation date.
+ * Never uses updatedAt, follow-up dates, or status modification dates.
  */
 export function rowMatchesDateFilter(
-  createdAtOrRow: string | Date | RowData | Record<string, any> | undefined | null,
-  filterDate: string | null
+  rowOrCreatedAt: string | Date | RowData | Record<string, any> | undefined | null,
+  filterDate: string | null | undefined
 ): boolean {
   if (!filterDate) return true;
-  if (!createdAtOrRow) return false;
+  if (!rowOrCreatedAt) return false;
 
   const targetYMD = toLocalYMD(filterDate);
   if (!targetYMD) return true;
 
-  let rawDate: string | Date | undefined | null = null;
+  const addedDate = getLeadAddedDate(rowOrCreatedAt);
+  if (!addedDate) return false;
 
-  if (typeof createdAtOrRow === "string" || createdAtOrRow instanceof Date) {
-    rawDate = createdAtOrRow;
-  } else if (typeof createdAtOrRow === "object") {
-    const rowObj = createdAtOrRow as any;
-    rawDate =
-      rowObj.createdAt ||
-      rowObj.data?.col_date ||
-      rowObj.data?.date ||
-      rowObj.data?.["Date Added"] ||
-      rowObj.data?.["Added Date"];
-  }
-
-  if (!rawDate) return false;
-
-  const leadYMD = toLocalYMD(rawDate);
+  const leadYMD = toLocalYMD(addedDate);
   if (!leadYMD) return false;
 
-  // Strict exact calendar day match (no >= or <= range, no UTC fallback bleed)
   return leadYMD === targetYMD;
+}
+
+export interface FilterSheetRowsOptions {
+  dateFilter?: string | null;
+  statusFilter?: string | null;
+  searchQuery?: string;
+}
+
+/**
+ * Single canonical filtering function for sheet rows.
+ * Evaluates valid leads, strict exact-day Added Date (IST), status filter, and search query.
+ * Guarantees that every returned row is unique by ID with zero duplication or retention of stale items.
+ */
+export function filterSheetRows(
+  rows: RowData[] | undefined | null,
+  columns: ColumnDef[] | undefined | null,
+  options: FilterSheetRowsOptions
+): RowData[] {
+  if (!rows || !Array.isArray(rows)) return [];
+
+  const { dateFilter, statusFilter, searchQuery } = options;
+  const hasDate = Boolean(dateFilter);
+  const hasStatus = Boolean(statusFilter);
+  const q = (searchQuery || "").trim().toLowerCase();
+  const hasSearch = q.length > 0;
+
+  const seenIds = new Set<string>();
+  const filtered: RowData[] = [];
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r) continue;
+
+    // Deduplicate by record ID
+    if (r.id) {
+      if (seenIds.has(r.id)) continue;
+      seenIds.add(r.id);
+    }
+
+    // Must contain valid lead data
+    if (!isValidLead(r.data)) continue;
+
+    // 1. Strict Added Date filter (IST calendar day)
+    if (hasDate && !rowMatchesDateFilter(r, dateFilter)) {
+      continue;
+    }
+
+    // 2. Status filter
+    if (hasStatus && !rowMatchesStatusFilter(r.data, statusFilter, columns || [])) {
+      continue;
+    }
+
+    // 3. Search query
+    if (hasSearch) {
+      const matches = Object.values(r.data || {}).some((val) =>
+        String(val || "").toLowerCase().includes(q)
+      );
+      if (!matches) continue;
+    }
+
+    filtered.push(r);
+  }
+
+  return filtered;
 }
 
 /**

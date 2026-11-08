@@ -3,7 +3,14 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
 import { STATUS_COLORS, SOURCE_COLORS } from "@/lib/defaults";
-import { rowMatchesStatusFilter, rowMatchesDateFilter, isValidLead, formatDateDisplay, sanitizeCellValue } from "@/lib/leads";
+import {
+  rowMatchesStatusFilter,
+  rowMatchesDateFilter,
+  isValidLead,
+  formatDateDisplay,
+  sanitizeCellValue,
+  filterSheetRows,
+} from "@/lib/leads";
 import {
   ChevronDown,
   Trash2,
@@ -529,26 +536,12 @@ export function SpreadsheetGrid({
     return Math.max(1000, sheet.rows.length + 10, expandedRowCount);
   }, [sheet.rows.length, expandedRowCount]);
 
-  // Fast map from consecutive row index (0, 1, 2...) to database RowData
-  // Mapped by both array index and explicit r.order to prevent blank cell rendering on paste
-  const rowsByOrder = useMemo(() => {
-    const map = new Map<number, RowData>();
-    sheet.rows.forEach((r, idx) => {
-      map.set(idx, r);
-    });
-    sheet.rows.forEach((r) => {
-      if (r.order !== undefined && r.order !== null) {
-        map.set(r.order, r);
-      }
-    });
-    return map;
-  }, [sheet.rows]);
-
-  // Helper to get row data at index
+  // Helper to get row data at index without relying on colliding order fields
   const getRowAtIndex = useCallback(
     (index: number): RowData => {
-      const existing = rowsByOrder.get(index);
-      if (existing) return existing;
+      if (index >= 0 && index < sheet.rows.length) {
+        return sheet.rows[index];
+      }
       return {
         id: `temp_${index}`,
         sheetId: sheet.id,
@@ -557,7 +550,7 @@ export function SpreadsheetGrid({
         styles: {},
       };
     },
-    [rowsByOrder, sheet.id]
+    [sheet.rows, sheet.id]
   );
 
   // Dynamic windowing calculations with ResizeObserver
@@ -602,22 +595,12 @@ export function SpreadsheetGrid({
 
   const filteredRows = useMemo(() => {
     if (!isFiltered) return [];
-    const matched: RowData[] = [];
-    sheet.rows.forEach((r) => {
-      if (!isValidLead(r.data)) return;
-      if (dateFilter && !rowMatchesDateFilter(r.createdAt, dateFilter)) return;
-      if (statusFilter && !rowMatchesStatusFilter(r.data, statusFilter, sheet.columns)) return;
-      if (searchQuery.trim()) {
-        const q = searchQuery.toLowerCase();
-        const matches = Object.values(r.data || {}).some((val) =>
-          String(val || "").toLowerCase().includes(q)
-        );
-        if (!matches) return;
-      }
-      matched.push(r);
+    return filterSheetRows(sheet.rows, sheet.columns, {
+      dateFilter,
+      statusFilter,
+      searchQuery,
     });
-    return matched;
-  }, [sheet.rows, isFiltered, dateFilter, statusFilter, searchQuery, sheet.columns]);
+  }, [sheet.rows, sheet.columns, isFiltered, dateFilter, statusFilter, searchQuery]);
 
   // Focus editing input on entering edit mode
   useEffect(() => {
@@ -1354,7 +1337,7 @@ export function SpreadsheetGrid({
         const rowsToUpsert: Partial<RowData>[] = [];
 
         for (let r = selectionRange.startRow; r <= selectionRange.endRow; r++) {
-          const existingRow = rowsByOrder.get(r) || currentSheet.rows[r];
+          const existingRow = getRowAtIndex(r);
           const isExistingInDb = Boolean(existingRow && existingRow.id && !existingRow.id.startsWith("temp_"));
           const rowData = existingRow ? { ...existingRow.data } : {};
 
@@ -1399,7 +1382,7 @@ export function SpreadsheetGrid({
 
       matrix.forEach((rowVals, rowOffset) => {
         const targetRowIndex = startRowIndex + rowOffset;
-        const existingRow = rowsByOrder.get(targetRowIndex) || currentSheet.rows[targetRowIndex];
+        const existingRow = getRowAtIndex(targetRowIndex);
         const isExistingInDb = Boolean(existingRow && existingRow.id && !existingRow.id.startsWith("temp_"));
 
         // If targetRowIndex exists in current tab's leads: update existing lead fields
@@ -1450,7 +1433,6 @@ export function SpreadsheetGrid({
       sheet.columns,
       sheet.id,
       totalRowCount,
-      rowsByOrder,
       getRowAtIndex,
       onUpdateCell,
       onBatchUpdateRows,
@@ -1752,7 +1734,7 @@ export function SpreadsheetGrid({
             {/* Rows to render (filtered leads consecutively, or virtualized window) */}
             {isFiltered
               ? filteredRows.map((row, renderedIdx) => {
-                  const rowIdx = row.order !== undefined ? row.order : renderedIdx;
+                  const rowIdx = renderedIdx;
                   const serialNumber = renderedIdx + 1;
 
                   const isRowSelected =
@@ -1764,7 +1746,7 @@ export function SpreadsheetGrid({
 
                   return (
                     <MemoizedGridRow
-                      key={row.id}
+                      key={row.id || `filtered_${renderedIdx}`}
                       rowIdx={rowIdx}
                       serialNumber={serialNumber}
                       row={row}

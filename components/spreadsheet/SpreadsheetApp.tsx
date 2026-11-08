@@ -3,7 +3,15 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { SheetMeta, SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
-import { isValidLead, getLeadStatus, isUnattendedLead, rowMatchesStatusFilter, rowMatchesDateFilter, sanitizeCellValue } from "@/lib/leads";
+import {
+  isValidLead,
+  getLeadStatus,
+  isUnattendedLead,
+  rowMatchesStatusFilter,
+  rowMatchesDateFilter,
+  sanitizeCellValue,
+  filterSheetRows,
+} from "@/lib/leads";
 import { HARDCODED_STATUS_FILTERS } from "@/lib/defaults";
 import { TopToolbar } from "./TopToolbar";
 import { StatusFilterBar } from "./StatusFilterBar";
@@ -124,12 +132,8 @@ export function SpreadsheetApp() {
   // Derived state: leads matching the active dateFilter (if set, only leads added on that exact date!)
   const activeSheetDateFilteredRows = useMemo(() => {
     if (!activeSheet || !activeSheet.rows) return [];
-    return activeSheet.rows.filter((r) => {
-      if (!isValidLead(r.data)) return false;
-      if (dateFilter && !rowMatchesDateFilter(r.createdAt, dateFilter)) {
-        return false;
-      }
-      return true;
+    return filterSheetRows(activeSheet.rows, activeSheet.columns, {
+      dateFilter,
     });
   }, [activeSheet, dateFilter]);
 
@@ -599,7 +603,7 @@ export function SpreadsheetApp() {
           return {
             ...prev,
             rows: prev.rows.map((r) => {
-              if (r.id === rowId || r.id === targetRowId || (rowId.startsWith("temp_") && r.order === data.row.order)) {
+              if (r.id === rowId || r.id === targetRowId) {
                 return {
                   ...r,
                   ...data.row,
