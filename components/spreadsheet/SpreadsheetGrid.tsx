@@ -65,7 +65,7 @@ interface GridCellProps {
   editValue?: string;
   onEditValueChange?: (val: string) => void;
   onCommitEdit?: () => void;
-  onCellPaste?: (rowId: string, colId: string, value: string, rowIdx: number) => Promise<void>;
+  onPaste?: (e: React.ClipboardEvent) => void;
   editInputRef?: React.RefObject<HTMLInputElement>;
   onCellMouseDown: (e: React.MouseEvent, rowIdx: number, colIdx: number, col: ColumnDef) => void;
   onCellMouseEnter: (rowIdx: number, colIdx: number) => void;
@@ -94,7 +94,7 @@ const GridCell = ({
   editValue = "",
   onEditValueChange,
   onCommitEdit,
-  onCellPaste,
+  onPaste,
   editInputRef,
   onCellMouseDown,
   onCellMouseEnter,
@@ -136,6 +136,7 @@ const GridCell = ({
       onMouseEnter={() => onCellMouseEnter(rowIdx, colIdx)}
       onDoubleClick={() => onCellDoubleClick(rowIdx, col)}
       onContextMenu={(e) => onCellContextMenu(e, rowIdx, colIdx, col)}
+      onPaste={onPaste}
       style={inlineStyle}
       className={`relative border-r border-b border-slate-300 px-3 py-1.5 transition-colors text-xs text-gray-900 font-normal overflow-hidden cursor-cell select-none ${
         !isMultiCell && isActive
@@ -164,17 +165,7 @@ const GridCell = ({
           value={editValue}
           onChange={(e) => onEditValueChange?.(e.target.value)}
           onBlur={onCommitEdit}
-          onPaste={async (e) => {
-            const pastedData = e.clipboardData.getData("text/plain");
-            e.preventDefault();
-            e.stopPropagation();
-            if (!pastedData) return;
-            const sanitized = sanitizeCellValue(pastedData, col);
-            onEditValueChange?.(sanitized);
-            if (onCellPaste) {
-              await onCellPaste(rowId, col.id, sanitized, rowIdx);
-            }
-          }}
+          onPaste={onPaste}
           onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === "Escape") {
               e.preventDefault();
@@ -271,7 +262,7 @@ interface GridRowProps {
   editValue: string;
   onEditValueChange: (val: string) => void;
   onCommitEdit: () => void;
-  onCellPaste?: (rowId: string, colId: string, value: string, rowIdx: number) => Promise<void>;
+  onPaste?: (e: React.ClipboardEvent) => void;
   editInputRef: React.RefObject<HTMLInputElement>;
   onRowHeaderClick: (e: React.MouseEvent, rowIdx: number) => void;
   onRowContextMenu: (e: React.MouseEvent, rowId: string, rowIdx: number) => void;
@@ -296,7 +287,7 @@ const GridRow = ({
   editValue,
   onEditValueChange,
   onCommitEdit,
-  onCellPaste,
+  onPaste,
   editInputRef,
   onRowHeaderClick,
   onRowContextMenu,
@@ -370,7 +361,7 @@ const GridRow = ({
             editValue={isEditing ? editValue : undefined}
             onEditValueChange={isEditing ? onEditValueChange : undefined}
             onCommitEdit={isEditing ? onCommitEdit : undefined}
-            onCellPaste={isEditing ? onCellPaste : undefined}
+            onPaste={onPaste}
             editInputRef={isEditing ? editInputRef : undefined}
             onCellMouseDown={onCellMouseDown}
             onCellMouseEnter={onCellMouseEnter}
@@ -387,8 +378,10 @@ const GridRow = ({
 
 const MemoizedGridRow = React.memo(GridRow, (prev, next) => {
   if (prev.serialNumber !== next.serialNumber) return false;
+  if (prev.row.id !== next.row.id) return false;
   if (prev.row !== next.row) return false;
   if (prev.row.data !== next.row.data) return false;
+  if (JSON.stringify(prev.row.data) !== JSON.stringify(next.row.data)) return false;
   if (prev.row.styles !== next.row.styles) return false;
   if (prev.columns !== next.columns) return false;
   if (prev.isRowSelected !== next.isRowSelected) return false;
@@ -474,7 +467,17 @@ export function SpreadsheetGrid({
   const [isMouseDown, setIsMouseDown] = useState(false);
   const [isDraggingCol, setIsDraggingCol] = useState(false);
 
-  // Stable refs to prevent callback re-creation on mouse down/drag
+  // Stable refs to prevent callback re-creation and stale closures during paste
+  const sheetRef = useRef(sheet);
+  useEffect(() => {
+    sheetRef.current = sheet;
+  }, [sheet]);
+
+  const activeCellRef = useRef(activeCell);
+  useEffect(() => {
+    activeCellRef.current = activeCell;
+  }, [activeCell]);
+
   const isMouseDownRef = useRef(isMouseDown);
   useEffect(() => {
     isMouseDownRef.current = isMouseDown;
@@ -527,10 +530,16 @@ export function SpreadsheetGrid({
   }, [sheet.rows.length, expandedRowCount]);
 
   // Fast map from consecutive row index (0, 1, 2...) to database RowData
+  // Mapped by both array index and explicit r.order to prevent blank cell rendering on paste
   const rowsByOrder = useMemo(() => {
     const map = new Map<number, RowData>();
     sheet.rows.forEach((r, idx) => {
       map.set(idx, r);
+    });
+    sheet.rows.forEach((r) => {
+      if (r.order !== undefined && r.order !== null) {
+        map.set(r.order, r);
+      }
     });
     return map;
   }, [sheet.rows]);
@@ -743,18 +752,6 @@ export function SpreadsheetGrid({
       }
     }
   }, [editValue, onUpdateCell, activeCell, sheet.columns, totalRowCount, setActiveCell]);
-
-  // Handle in-cell paste event asynchronously with background save
-  const handleCellPaste = useCallback(
-    async (rowId: string, colId: string, value: string, rowIdx: number) => {
-      try {
-        await onUpdateCell(rowId, colId, value, rowIdx);
-      } catch (err) {
-        console.error("Cell paste save error:", err);
-      }
-    },
-    [onUpdateCell]
-  );
 
   // Start in-cell edit
   const startEditing = useCallback((rowIdx: number, col: ColumnDef) => {
@@ -1287,18 +1284,14 @@ export function SpreadsheetGrid({
   // Multi-cell Copy & Paste (Ctrl+C / Ctrl+V) - Excel & Google Sheets compatible
   const handlePaste = useCallback(
     async (e: React.ClipboardEvent) => {
-      // If user is actively typing inside an input/textarea (like column rename or cell edit), let the input handle it naturally
-      const target = e.target as HTMLElement;
-      const isInput = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
-      if (editingCell && isInput) {
-        return;
-      }
-
       // Explicitly prevent browser default action and stop bubbling to eliminate page reloads and DOM glitches
       e.preventDefault();
       e.stopPropagation();
 
-      if (!activeCell) return;
+      const currentActive = activeCellRef.current || activeCell;
+      const currentSheet = sheetRef.current || sheet;
+      if (!currentActive) return;
+
       const clipboardText = e.clipboardData.getData("text/plain");
       if (!clipboardText) return;
 
@@ -1309,6 +1302,11 @@ export function SpreadsheetGrid({
         rawLines.pop();
       }
       if (rawLines.length === 0) return;
+
+      // If user was actively editing a cell, close edit mode cleanly
+      if (editingCell) {
+        setEditingCell(null);
+      }
 
       const parsedGrid = rawLines.map((line) => {
         return line.split("\t").map((cell) => {
@@ -1324,13 +1322,13 @@ export function SpreadsheetGrid({
 
       // 1. SINGLE CELL PASTE (Single value pasted into single active cell)
       if (isSingleValue && !isMultiCell) {
-        const targetCol = sheet.columns.find((c) => c.id === activeCell.colId);
+        const targetCol = currentSheet.columns.find((c) => c.id === currentActive.colId);
         const rawVal = parsedGrid[0][0];
         const sanitizedVal = sanitizeCellValue(rawVal, targetCol);
-        const existingRow = getRowAtIndex(activeCell.rowIdx);
+        const existingRow = getRowAtIndex(currentActive.rowIdx);
 
         try {
-          await onUpdateCell(existingRow.id, activeCell.colId, sanitizedVal, activeCell.rowIdx);
+          await onUpdateCell(existingRow.id, currentActive.colId, sanitizedVal, currentActive.rowIdx);
         } catch (err) {
           console.error("Single cell paste error:", err);
         }
@@ -1354,7 +1352,7 @@ export function SpreadsheetGrid({
           const rowData = existingRow ? { ...existingRow.data } : {};
 
           for (let c = selectionRange.startCol; c <= selectionRange.endCol; c++) {
-            const col = sheet.columns[c];
+            const col = currentSheet.columns[c];
             if (col) {
               rowData[col.id] = sanitizeCellValue(rawVal, col);
             }
@@ -1362,7 +1360,7 @@ export function SpreadsheetGrid({
 
           rowsToUpsert.push({
             id: existingRow ? existingRow.id : `temp_${r}`,
-            sheetId: sheet.id,
+            sheetId: currentSheet.id,
             order: r,
             data: rowData,
           });
@@ -1380,8 +1378,8 @@ export function SpreadsheetGrid({
 
       // 3. MATRIX PASTE RETENTION (Excel / Google Sheets multi-cell grid paste):
       // Paste matrix starting from the top-left active cell
-      const startRowIdx = activeCell.rowIdx;
-      const startColIdx = sheet.columns.findIndex((c) => c.id === activeCell.colId);
+      const startRowIdx = currentActive.rowIdx;
+      const startColIdx = currentSheet.columns.findIndex((c) => c.id === currentActive.colId);
       if (startColIdx === -1) return;
 
       // Expand rows dynamically if paste exceeds current row count
@@ -1400,15 +1398,15 @@ export function SpreadsheetGrid({
 
         rowVals.forEach((val, cOffset) => {
           const targetColIdx = startColIdx + cOffset;
-          if (targetColIdx < sheet.columns.length) {
-            const col = sheet.columns[targetColIdx];
+          if (targetColIdx < currentSheet.columns.length) {
+            const col = currentSheet.columns[targetColIdx];
             rowData[col.id] = sanitizeCellValue(val, col);
           }
         });
 
         rowsToUpsert.push({
           id: existingRow ? existingRow.id : `temp_${targetRowIdx}`,
-          sheetId: sheet.id,
+          sheetId: currentSheet.id,
           order: targetRowIdx,
           data: rowData,
         });
@@ -1756,7 +1754,7 @@ export function SpreadsheetGrid({
                   editValue={editValue}
                   onEditValueChange={setEditValue}
                   onCommitEdit={commitEdit}
-                  onCellPaste={handleCellPaste}
+                  onPaste={handlePaste}
                   editInputRef={editInputRef}
                   onRowHeaderClick={handleRowHeaderClick}
                   onRowContextMenu={handleRowContextMenu}

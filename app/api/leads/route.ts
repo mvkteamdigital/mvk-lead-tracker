@@ -131,7 +131,18 @@ export async function POST(req: Request) {
     const body = await req.json();
     let sheetId = body.sheetId;
 
-    // If no sheetId provided, use user's assigned sheet or active sheet
+    // If userId provided, look up sheet for that specific member
+    if (!sheetId && body.userId) {
+      const targetUserSheet = await prisma.sheet.findFirst({
+        where: { userId: body.userId },
+        orderBy: { order: "asc" },
+      });
+      if (targetUserSheet) {
+        sheetId = targetUserSheet.id;
+      }
+    }
+
+    // If still no sheetId provided, use user's assigned sheet or active sheet
     if (!sheetId) {
       const userSheet = await prisma.sheet.findFirst({
         where: user.role === "ADMIN" ? {} : { userId: user.id },

@@ -228,8 +228,9 @@ const MemoizedMobileLeadCard = React.memo(
   MobileLeadCard,
   (prev, next) => {
     if (prev.lead !== next.lead) return false;
-    if (prev.lead.data !== next.lead.data) return false;
     if (prev.lead.id !== next.lead.id) return false;
+    if (prev.lead.data !== next.lead.data) return false;
+    if (JSON.stringify(prev.lead.data) !== JSON.stringify(next.lead.data)) return false;
     if (prev.lead.updatedAt !== next.lead.updatedAt) return false;
     if (prev.lead.createdAt !== next.lead.createdAt) return false;
     if (prev.columns !== next.columns) return false;

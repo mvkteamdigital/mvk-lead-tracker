@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { SheetMeta, SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
 import { isValidLead, getLeadStatus, isUnattendedLead, rowMatchesStatusFilter, rowMatchesDateFilter, sanitizeCellValue } from "@/lib/leads";
@@ -41,6 +41,17 @@ export function SpreadsheetApp() {
     colId: string;
     colName: string;
   } | null>(null);
+
+  // Stable refs to prevent stale closure issues during paste and rapid updates across tabs
+  const activeSheetRef = useRef<SheetDetail | null>(activeSheet);
+  useEffect(() => {
+    activeSheetRef.current = activeSheet;
+  }, [activeSheet]);
+
+  const activeCellRef = useRef<{ rowIdx: number; colId: string; colName: string } | null>(activeCell);
+  useEffect(() => {
+    activeCellRef.current = activeCell;
+  }, [activeCell]);
 
   // Modals state
   const [isDropdownModalOpen, setIsDropdownModalOpen] = useState(false);
@@ -499,13 +510,14 @@ export function SpreadsheetApp() {
 
   // 3. Real-time Cell Value Update (Supports any of the 1,000 blank rows)
   const handleUpdateCell = async (rowId: string, columnId: string, value: string, order?: number) => {
-    if (!activeSheet) return;
+    const currentSheet = activeSheetRef.current || activeSheet;
+    if (!currentSheet) return;
 
     pushUndoSnapshot();
 
-    const colDef = activeSheet.columns.find((c) => c.id === columnId);
+    const colDef = currentSheet.columns.find((c) => c.id === columnId);
     const sanitizedValue = sanitizeCellValue(value, colDef);
-    const rowOrder = order !== undefined ? order : activeCell?.rowIdx ?? 0;
+    const rowOrder = order !== undefined ? order : activeCellRef.current?.rowIdx ?? 0;
 
     // Optimistically update local state immediately for zero-lag UI
     setActiveSheet((prev) => {
@@ -556,7 +568,7 @@ export function SpreadsheetApp() {
     setSavingStatus("saving");
 
     try {
-      const res = await fetch(`/api/sheets/${activeSheet.id}/rows`, {
+      const res = await fetch(`/api/sheets/${currentSheet.id}/rows`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -564,6 +576,7 @@ export function SpreadsheetApp() {
           order: rowOrder,
           columnId,
           value: sanitizedValue,
+          userId: currentSheet.userId || undefined,
         }),
       });
 
@@ -574,7 +587,7 @@ export function SpreadsheetApp() {
         } else {
           showToast(errData.error || "Failed to save cell data.", "error");
         }
-        silentRefreshActiveSheet(activeSheet.id);
+        silentRefreshActiveSheet(currentSheet.id);
         setSavingStatus("error");
         return;
       }
@@ -586,7 +599,7 @@ export function SpreadsheetApp() {
           return {
             ...prev,
             rows: prev.rows.map((r) => {
-              if (r.id === rowId || r.id === targetRowId) {
+              if (r.id === rowId || r.id === targetRowId || (rowId.startsWith("temp_") && r.order === data.row.order)) {
                 return {
                   ...r,
                   ...data.row,
@@ -602,14 +615,15 @@ export function SpreadsheetApp() {
     } catch (err: any) {
       console.error("Cell save error:", err);
       showToast("Network error: Could not save changes.", "error");
-      silentRefreshActiveSheet(activeSheet.id);
+      silentRefreshActiveSheet(currentSheet.id);
       setSavingStatus("error");
     }
   };
 
   // 4. Batch Rows Update (Supports multi-row paste from Excel / Google Sheets)
   const handleBatchUpdateRows = async (rows: Partial<RowData>[]) => {
-    if (!activeSheet) return;
+    const currentSheet = activeSheetRef.current || activeSheet;
+    if (!currentSheet) return;
 
     pushUndoSnapshot();
 
@@ -617,7 +631,7 @@ export function SpreadsheetApp() {
     const sanitizedRows = rows.map((r) => {
       const incomingData = typeof r.data === "string" ? JSON.parse(r.data) : r.data || {};
       const cleanData: Record<string, any> = { ...incomingData };
-      activeSheet.columns.forEach((c) => {
+      currentSheet.columns.forEach((c) => {
         if (cleanData[c.id] !== undefined) {
           cleanData[c.id] = sanitizeCellValue(cleanData[c.id], c);
         }
@@ -649,31 +663,18 @@ export function SpreadsheetApp() {
             ...exist,
             data: { ...exist.data, ...incomingData },
           };
-        } else if (targetIndex >= newRows.length) {
-          newRows[targetIndex] = {
-            id: r.id || `temp_${targetIndex}`,
+        } else {
+          const insertOrder = r.order !== undefined ? r.order : newRows.length;
+          newRows.push({
+            id: r.id || `temp_${insertOrder}`,
             sheetId: prev.id,
-            order: targetIndex,
+            order: insertOrder,
             data: incomingData,
             styles: {},
             createdAt: new Date().toISOString(),
-          };
+          });
         }
       });
-
-      // Fill any gaps if paste extended past existing row length
-      for (let i = 0; i < newRows.length; i++) {
-        if (!newRows[i]) {
-          newRows[i] = {
-            id: `temp_${i}`,
-            sheetId: prev.id,
-            order: i,
-            data: {},
-            styles: {},
-            createdAt: new Date().toISOString(),
-          };
-        }
-      }
 
       return {
         ...prev,
@@ -684,10 +685,13 @@ export function SpreadsheetApp() {
     setSavingStatus("saving");
 
     try {
-      const res = await fetch(`/api/sheets/${activeSheet.id}/rows`, {
+      const res = await fetch(`/api/sheets/${currentSheet.id}/rows`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows: sanitizedRows }),
+        body: JSON.stringify({
+          rows: sanitizedRows,
+          userId: currentSheet.userId || undefined,
+        }),
       });
 
       if (!res.ok) {
@@ -697,7 +701,7 @@ export function SpreadsheetApp() {
         } else {
           showToast(errData.error || "Failed to save pasted data.", "error");
         }
-        silentRefreshActiveSheet(activeSheet.id);
+        silentRefreshActiveSheet(currentSheet.id);
         setSavingStatus("error");
         return;
       }
@@ -713,7 +717,7 @@ export function SpreadsheetApp() {
           });
           return {
             ...prev,
-            rows: prev.rows.map((r, idx) => {
+            rows: prev.rows.map((r) => {
               if (r.id && idMap.has(r.id)) return idMap.get(r.id)!;
               if (r.order !== undefined && orderMap.has(r.order)) return orderMap.get(r.order)!;
               return r;
@@ -725,7 +729,7 @@ export function SpreadsheetApp() {
     } catch (err: any) {
       console.error("Batch update error:", err);
       showToast("Network error: Failed to save pasted data.", "error");
-      silentRefreshActiveSheet(activeSheet.id);
+      silentRefreshActiveSheet(currentSheet.id);
       setSavingStatus("error");
     }
   };
@@ -976,11 +980,12 @@ export function SpreadsheetApp() {
     updatedData: Record<string, string>,
     order?: number
   ) => {
-    if (!activeSheet) return;
+    const currentSheet = activeSheetRef.current || activeSheet;
+    if (!currentSheet) return;
 
     pushUndoSnapshot();
 
-    const rowOrder = order !== undefined ? order : activeCell?.rowIdx ?? 0;
+    const rowOrder = order !== undefined ? order : activeCellRef.current?.rowIdx ?? 0;
 
     // Optimistically update local state immediately for zero-lag UI
     setActiveSheet((prev) => {
@@ -1031,11 +1036,12 @@ export function SpreadsheetApp() {
     setSavingStatus("saving");
 
     try {
-      const res = await fetch(`/api/sheets/${activeSheet.id}/rows`, {
+      const res = await fetch(`/api/sheets/${currentSheet.id}/rows`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           rows: [{ id: rowId.startsWith("temp_") ? undefined : rowId, order: rowOrder, data: updatedData }],
+          userId: currentSheet.userId || undefined,
         }),
       });
 
@@ -1046,7 +1052,7 @@ export function SpreadsheetApp() {
         } else {
           showToast(errData.error || "Failed to save lead.", "error");
         }
-        silentRefreshActiveSheet(activeSheet.id);
+        silentRefreshActiveSheet(currentSheet.id);
         setSavingStatus("error");
         throw new Error(errData.error || "Failed to save lead");
       }
@@ -1075,22 +1081,23 @@ export function SpreadsheetApp() {
   };
 
   const handleSaveLeadFromModal = async (data: Record<string, string>, rowId?: string) => {
-    if (!activeSheet) return;
+    const currentSheet = activeSheetRef.current || activeSheet;
+    if (!currentSheet) return;
 
     if (rowId && !rowId.startsWith("temp_")) {
       // Update existing lead using unified handler
       await handleUpdateLead(rowId, data);
     } else {
       // Create new lead in database
-      const existingOrders = activeSheet.rows.map((r) => r.order ?? 0);
+      const existingOrders = currentSheet.rows.map((r) => r.order ?? 0);
       const nextOrder = existingOrders.length > 0 ? Math.max(...existingOrders) + 1 : 0;
 
       setSavingStatus("saving");
       try {
-        const res = await fetch(`/api/sheets/${activeSheet.id}/rows`, {
+        const res = await fetch(`/api/sheets/${currentSheet.id}/rows`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ data, order: nextOrder }),
+          body: JSON.stringify({ data, order: nextOrder, userId: currentSheet.userId || undefined }),
         });
 
         if (!res.ok) {
@@ -1288,6 +1295,7 @@ export function SpreadsheetApp() {
                 console.log("Desktop Grid Data:", activeSheet.rows);
                 return (
                   <SpreadsheetGrid
+                    key={activeSheet.id}
                     sheet={activeSheet}
                     onUpdateCell={handleUpdateCell}
                     onBatchUpdateRows={handleBatchUpdateRows}
