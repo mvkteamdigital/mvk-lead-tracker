@@ -1,4 +1,4 @@
-import { ColumnDef } from "./types";
+import { ColumnDef, RowData } from "./types";
 
 /**
  * Utility functions for lead validation, status tracking, and counting.
@@ -459,35 +459,67 @@ export function getRowPhoneNumber(data: Record<string, any> | undefined | null):
 }
 
 /**
- * Checks whether a row's createdAt timestamp matches the selected filter date (YYYY-MM-DD).
- * Accurately compares against both local calendar date and UTC date to avoid any timezone offset issues.
+ * Normalizes a date input (Date object, ISO timestamp, or date string)
+ * into a strict local YYYY-MM-DD string.
+ */
+export function toLocalYMD(dateInput: string | Date | undefined | null): string {
+  if (!dateInput) return "";
+
+  // If already a strict YYYY-MM-DD string, return directly
+  if (typeof dateInput === "string") {
+    const trimmed = dateInput.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      return trimmed;
+    }
+  }
+
+  try {
+    const d = typeof dateInput === "string" ? new Date(dateInput) : dateInput;
+    if (isNaN(d.getTime())) return String(dateInput).trim();
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Checks whether a row's added date strictly matches the selected filter date on an exact calendar day.
+ * Prevents older or newer leads from bleeding into the filtered view by strictly checking YYYY-MM-DD === selectedDate.
  */
 export function rowMatchesDateFilter(
-  createdAt: string | Date | undefined | null,
+  createdAtOrRow: string | Date | RowData | Record<string, any> | undefined | null,
   filterDate: string | null
 ): boolean {
   if (!filterDate) return true;
-  if (!createdAt) return false;
+  if (!createdAtOrRow) return false;
 
-  try {
-    const d = typeof createdAt === "string" ? new Date(createdAt) : createdAt;
-    if (isNaN(d.getTime())) return false;
+  const targetYMD = toLocalYMD(filterDate);
+  if (!targetYMD) return true;
 
-    // 1. Local date YYYY-MM-DD
-    const localYear = d.getFullYear();
-    const localMonth = String(d.getMonth() + 1).padStart(2, "0");
-    const localDay = String(d.getDate()).padStart(2, "0");
-    const localYMD = `${localYear}-${localMonth}-${localDay}`;
-    if (localYMD === filterDate) return true;
+  let rawDate: string | Date | undefined | null = null;
 
-    // 2. UTC date YYYY-MM-DD (fallback for UTC-stored timestamps)
-    const utcYMD = d.toISOString().split("T")[0];
-    if (utcYMD === filterDate) return true;
-
-    return false;
-  } catch {
-    return false;
+  if (typeof createdAtOrRow === "string" || createdAtOrRow instanceof Date) {
+    rawDate = createdAtOrRow;
+  } else if (typeof createdAtOrRow === "object") {
+    const rowObj = createdAtOrRow as any;
+    rawDate =
+      rowObj.createdAt ||
+      rowObj.data?.col_date ||
+      rowObj.data?.date ||
+      rowObj.data?.["Date Added"] ||
+      rowObj.data?.["Added Date"];
   }
+
+  if (!rawDate) return false;
+
+  const leadYMD = toLocalYMD(rawDate);
+  if (!leadYMD) return false;
+
+  // Strict exact calendar day match (no >= or <= range, no UTC fallback bleed)
+  return leadYMD === targetYMD;
 }
 
 /**

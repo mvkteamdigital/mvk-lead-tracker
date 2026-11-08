@@ -600,10 +600,10 @@ export function SpreadsheetGrid({
   // Dynamic filter state: when searching, filtering by date, or filtering by status
   const isFiltered = Boolean(dateFilter || statusFilter || searchQuery.trim());
 
-  const filteredRowIndices = useMemo(() => {
+  const filteredRows = useMemo(() => {
     if (!isFiltered) return [];
-    const indices: number[] = [];
-    sheet.rows.forEach((r, idx) => {
+    const matched: RowData[] = [];
+    sheet.rows.forEach((r) => {
       if (!isValidLead(r.data)) return;
       if (dateFilter && !rowMatchesDateFilter(r.createdAt, dateFilter)) return;
       if (statusFilter && !rowMatchesStatusFilter(r.data, statusFilter, sheet.columns)) return;
@@ -614,9 +614,9 @@ export function SpreadsheetGrid({
         );
         if (!matches) return;
       }
-      indices.push(idx);
+      matched.push(r);
     });
-    return indices;
+    return matched;
   }, [sheet.rows, isFiltered, dateFilter, statusFilter, searchQuery, sheet.columns]);
 
   // Focus editing input on entering edit mode
@@ -1606,8 +1606,8 @@ export function SpreadsheetGrid({
                   ? "bg-slate-900 text-amber-300 font-bold border-slate-950"
                   : "bg-amber-300 text-slate-950 font-bold border-amber-400";
 
-                const maxRowForCol = isFiltered && filteredRowIndices.length > 0
-                  ? Math.max(...filteredRowIndices)
+                const maxRowForCol = isFiltered && filteredRows.length > 0
+                  ? Math.max(...filteredRows.map((r, i) => (r.order !== undefined ? r.order : i)))
                   : totalRowCount - 1;
 
                 const isColSelected =
@@ -1727,7 +1727,7 @@ export function SpreadsheetGrid({
             )}
 
             {/* Empty state when filtered and no leads match */}
-            {isFiltered && filteredRowIndices.length === 0 && (
+            {isFiltered && filteredRows.length === 0 && (
               <tr>
                 <td colSpan={sheet.columns.length + 1} className="py-16 text-center bg-white border-b border-slate-200">
                   <div className="flex flex-col items-center justify-center gap-2 max-w-sm mx-auto text-slate-500">
@@ -1750,45 +1750,85 @@ export function SpreadsheetGrid({
             )}
 
             {/* Rows to render (filtered leads consecutively, or virtualized window) */}
-            {(isFiltered ? filteredRowIndices : visibleRowIndices).map((rowIdx, renderedIdx) => {
-              const row = getRowAtIndex(rowIdx);
-              const serialNumber = isFiltered ? renderedIdx + 1 : rowIdx + 1;
+            {isFiltered
+              ? filteredRows.map((row, renderedIdx) => {
+                  const rowIdx = row.order !== undefined ? row.order : renderedIdx;
+                  const serialNumber = renderedIdx + 1;
 
-              const isRowSelected =
-                selectionRange !== null &&
-                rowIdx >= selectionRange.startRow &&
-                rowIdx <= selectionRange.endRow &&
-                selectionRange.startCol === 0 &&
-                selectionRange.endCol >= (sheet.columns.length - 1);
+                  const isRowSelected =
+                    selectionRange !== null &&
+                    rowIdx >= selectionRange.startRow &&
+                    rowIdx <= selectionRange.endRow &&
+                    selectionRange.startCol === 0 &&
+                    selectionRange.endCol >= (sheet.columns.length - 1);
 
-              return (
-                <MemoizedGridRow
-                  key={row.id}
-                  rowIdx={rowIdx}
-                  serialNumber={serialNumber}
-                  row={row}
-                  columns={sheet.columns}
-                  isRowSelected={isRowSelected}
-                  activeCell={activeCell}
-                  selectionRange={selectionRange}
-                  isMultiCell={isMultiCell}
-                  editingCell={editingCell}
-                  editValue={editValue}
-                  onEditValueChange={setEditValue}
-                  onCommitEdit={commitEdit}
-                  onPaste={handlePaste}
-                  editInputRef={editInputRef}
-                  onRowHeaderClick={handleRowHeaderClick}
-                  onRowContextMenu={handleRowContextMenu}
-                  onCellMouseDown={handleCellMouseDown}
-                  onCellMouseEnter={handleCellMouseEnter}
-                  onCellDoubleClick={handleCellDoubleClick}
-                  onCellContextMenu={handleContextMenu}
-                  onDropdownClick={handleDropdownClick}
-                  onStartEditing={startEditing}
-                />
-              );
-            })}
+                  return (
+                    <MemoizedGridRow
+                      key={row.id}
+                      rowIdx={rowIdx}
+                      serialNumber={serialNumber}
+                      row={row}
+                      columns={sheet.columns}
+                      isRowSelected={isRowSelected}
+                      activeCell={activeCell}
+                      selectionRange={selectionRange}
+                      isMultiCell={isMultiCell}
+                      editingCell={editingCell}
+                      editValue={editValue}
+                      onEditValueChange={setEditValue}
+                      onCommitEdit={commitEdit}
+                      onPaste={handlePaste}
+                      editInputRef={editInputRef}
+                      onRowHeaderClick={handleRowHeaderClick}
+                      onRowContextMenu={handleRowContextMenu}
+                      onCellMouseDown={handleCellMouseDown}
+                      onCellMouseEnter={handleCellMouseEnter}
+                      onCellDoubleClick={handleCellDoubleClick}
+                      onCellContextMenu={handleContextMenu}
+                      onDropdownClick={handleDropdownClick}
+                      onStartEditing={startEditing}
+                    />
+                  );
+                })
+              : visibleRowIndices.map((rowIdx) => {
+                  const row = getRowAtIndex(rowIdx);
+                  const serialNumber = rowIdx + 1;
+
+                  const isRowSelected =
+                    selectionRange !== null &&
+                    rowIdx >= selectionRange.startRow &&
+                    rowIdx <= selectionRange.endRow &&
+                    selectionRange.startCol === 0 &&
+                    selectionRange.endCol >= (sheet.columns.length - 1);
+
+                  return (
+                    <MemoizedGridRow
+                      key={row.id}
+                      rowIdx={rowIdx}
+                      serialNumber={serialNumber}
+                      row={row}
+                      columns={sheet.columns}
+                      isRowSelected={isRowSelected}
+                      activeCell={activeCell}
+                      selectionRange={selectionRange}
+                      isMultiCell={isMultiCell}
+                      editingCell={editingCell}
+                      editValue={editValue}
+                      onEditValueChange={setEditValue}
+                      onCommitEdit={commitEdit}
+                      onPaste={handlePaste}
+                      editInputRef={editInputRef}
+                      onRowHeaderClick={handleRowHeaderClick}
+                      onRowContextMenu={handleRowContextMenu}
+                      onCellMouseDown={handleCellMouseDown}
+                      onCellMouseEnter={handleCellMouseEnter}
+                      onCellDoubleClick={handleCellDoubleClick}
+                      onCellContextMenu={handleContextMenu}
+                      onDropdownClick={handleDropdownClick}
+                      onStartEditing={startEditing}
+                    />
+                  );
+                })}
 
             {/* Bottom Spacer (only in unfiltered 1,000-row mode) */}
             {!isFiltered && bottomSpacerHeight > 0 && (
