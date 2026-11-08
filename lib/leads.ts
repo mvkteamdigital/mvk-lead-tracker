@@ -504,3 +504,84 @@ export function formatDateDisplay(dateStr: string | null | undefined): string {
     return dateStr;
   }
 }
+
+/**
+ * Sanitizes and cleans clipboard data before state updates and database writes.
+ * Strips non-numeric characters/spaces for phone/number columns, formats dates,
+ * removes unprintable ASCII control characters, and removes Excel quotation wrappers.
+ */
+export function sanitizeCellValue(rawValue: any, col?: ColumnDef): string {
+  if (rawValue === undefined || rawValue === null) return "";
+  let val = String(rawValue).trim();
+  if (!val) return "";
+
+  // 1. Remove non-printable control characters & null bytes (preserve standard text)
+  val = val.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "");
+
+  // 2. Strip Excel/Sheets multi-line quote wrapping (e.g., "cell content" -> cell content)
+  if (val.startsWith('"') && val.endsWith('"') && val.length >= 2) {
+    val = val.substring(1, val.length - 1).replace(/""/g, '"');
+  }
+
+  // 3. Flatten internal newlines/carriage returns for single cell storage
+  val = val.replace(/[\r\n\t]+/g, " ").trim();
+
+  if (!col) return val;
+
+  const colIdLower = (col.id || "").toLowerCase();
+  const colNameLower = (col.name || "").toLowerCase();
+
+  // 4. Phone Number sanitization
+  const isPhoneColumn =
+    colIdLower === "col_number" ||
+    colIdLower.includes("phone") ||
+    colIdLower.includes("mobile") ||
+    colIdLower.includes("contact") ||
+    colNameLower.includes("phone") ||
+    colNameLower.includes("number") ||
+    colNameLower.includes("mobile") ||
+    colNameLower.includes("contact");
+
+  if (isPhoneColumn) {
+    // Strip out all non-numeric characters and spaces so Prisma/Postgres doesn't reject the payload
+    // Handles formats like "+91 98765-43210", "(987) 654 3210", "98765 43210" -> "9876543210"
+    const digitsOnly = val.replace(/\D/g, "");
+    if (digitsOnly.length === 12 && digitsOnly.startsWith("91")) {
+      return digitsOnly.slice(2);
+    }
+    if (digitsOnly.length === 11 && digitsOnly.startsWith("0")) {
+      return digitsOnly.slice(1);
+    }
+    return digitsOnly;
+  }
+
+  // 5. Numeric column sanitization
+  if (col.type === "number") {
+    // Strip non-numeric characters, preserving decimal points and negative signs
+    return val.replace(/[^\d.-]/g, "").trim();
+  }
+
+  // 6. Date column sanitization
+  if (col.type === "date" || colIdLower.includes("date") || colNameLower.includes("date")) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(val)) return val;
+    const parsed = new Date(val);
+    if (!isNaN(parsed.getTime())) {
+      try {
+        return parsed.toISOString().split("T")[0];
+      } catch {
+        return val;
+      }
+    }
+    return val;
+  }
+
+  // 7. Dropdown column sanitization (match casing of options)
+  if (col.type === "dropdown" && Array.isArray(col.options) && col.options.length > 0) {
+    const match = col.options.find(
+      (opt) => opt.toLowerCase().trim() === val.toLowerCase().trim()
+    );
+    if (match) return match;
+  }
+
+  return val;
+}

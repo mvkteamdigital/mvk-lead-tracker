@@ -43,6 +43,17 @@ export function FormulaBar({
             onCommit();
           }
         }}
+        onPaste={(e) => {
+          const pastedData = e.clipboardData.getData("text/plain");
+          e.preventDefault();
+          e.stopPropagation();
+          if (!pastedData) return;
+          const cleanVal = pastedData
+            .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
+            .replace(/[\r\n\t]+/g, " ")
+            .trim();
+          onCellValueChange(cleanVal);
+        }}
         placeholder={activeCell ? "Enter value or lead data..." : "Select cell to edit"}
         className="flex-1 px-2 py-0.5 bg-transparent border-0 outline-none text-slate-800 focus:bg-slate-50 rounded text-xs"
       />

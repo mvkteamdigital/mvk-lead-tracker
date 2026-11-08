@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
 import { STATUS_COLORS, SOURCE_COLORS } from "@/lib/defaults";
-import { rowMatchesStatusFilter, rowMatchesDateFilter, isValidLead, formatDateDisplay } from "@/lib/leads";
+import { rowMatchesStatusFilter, rowMatchesDateFilter, isValidLead, formatDateDisplay, sanitizeCellValue } from "@/lib/leads";
 import {
   ChevronDown,
   Trash2,
@@ -65,6 +65,7 @@ interface GridCellProps {
   editValue?: string;
   onEditValueChange?: (val: string) => void;
   onCommitEdit?: () => void;
+  onCellPaste?: (rowId: string, colId: string, value: string, rowIdx: number) => Promise<void>;
   editInputRef?: React.RefObject<HTMLInputElement>;
   onCellMouseDown: (e: React.MouseEvent, rowIdx: number, colIdx: number, col: ColumnDef) => void;
   onCellMouseEnter: (rowIdx: number, colIdx: number) => void;
@@ -93,6 +94,7 @@ const GridCell = ({
   editValue = "",
   onEditValueChange,
   onCommitEdit,
+  onCellPaste,
   editInputRef,
   onCellMouseDown,
   onCellMouseEnter,
@@ -158,13 +160,26 @@ const GridCell = ({
       {isEditing ? (
         <input
           ref={editInputRef}
-          type={col.type === "date" ? "date" : col.type === "number" ? "number" : "text"}
+          type={col.type === "date" ? "date" : "text"}
           value={editValue}
           onChange={(e) => onEditValueChange?.(e.target.value)}
           onBlur={onCommitEdit}
-          onPaste={(e) => {
-            // Stop input paste from bubbling up to grid multi-cell handler
+          onPaste={async (e) => {
+            const pastedData = e.clipboardData.getData("text/plain");
+            e.preventDefault();
             e.stopPropagation();
+            if (!pastedData) return;
+            const sanitized = sanitizeCellValue(pastedData, col);
+            onEditValueChange?.(sanitized);
+            if (onCellPaste) {
+              await onCellPaste(rowId, col.id, sanitized, rowIdx);
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === "Escape") {
+              e.preventDefault();
+              onCommitEdit?.();
+            }
           }}
           className="absolute inset-0 w-full h-full px-2 text-xs bg-white text-gray-900 font-medium border-2 border-blue-600 outline-none z-20 select-text"
         />
@@ -256,6 +271,7 @@ interface GridRowProps {
   editValue: string;
   onEditValueChange: (val: string) => void;
   onCommitEdit: () => void;
+  onCellPaste?: (rowId: string, colId: string, value: string, rowIdx: number) => Promise<void>;
   editInputRef: React.RefObject<HTMLInputElement>;
   onRowHeaderClick: (e: React.MouseEvent, rowIdx: number) => void;
   onRowContextMenu: (e: React.MouseEvent, rowId: string, rowIdx: number) => void;
@@ -280,6 +296,7 @@ const GridRow = ({
   editValue,
   onEditValueChange,
   onCommitEdit,
+  onCellPaste,
   editInputRef,
   onRowHeaderClick,
   onRowContextMenu,
@@ -353,6 +370,7 @@ const GridRow = ({
             editValue={isEditing ? editValue : undefined}
             onEditValueChange={isEditing ? onEditValueChange : undefined}
             onCommitEdit={isEditing ? onCommitEdit : undefined}
+            onCellPaste={isEditing ? onCellPaste : undefined}
             editInputRef={isEditing ? editInputRef : undefined}
             onCellMouseDown={onCellMouseDown}
             onCellMouseEnter={onCellMouseEnter}
@@ -725,6 +743,18 @@ export function SpreadsheetGrid({
       }
     }
   }, [editValue, onUpdateCell, activeCell, sheet.columns, totalRowCount, setActiveCell]);
+
+  // Handle in-cell paste event asynchronously with background save
+  const handleCellPaste = useCallback(
+    async (rowId: string, colId: string, value: string, rowIdx: number) => {
+      try {
+        await onUpdateCell(rowId, colId, value, rowIdx);
+      } catch (err) {
+        console.error("Cell paste save error:", err);
+      }
+    },
+    [onUpdateCell]
+  );
 
   // Start in-cell edit
   const startEditing = useCallback((rowIdx: number, col: ColumnDef) => {
@@ -1292,10 +1322,25 @@ export function SpreadsheetGrid({
 
       const isSingleValue = parsedGrid.length === 1 && parsedGrid[0].length === 1;
 
-      // 1. SINGLE VALUE PASTE TO MULTI-CELL RANGE:
+      // 1. SINGLE CELL PASTE (Single value pasted into single active cell)
+      if (isSingleValue && !isMultiCell) {
+        const targetCol = sheet.columns.find((c) => c.id === activeCell.colId);
+        const rawVal = parsedGrid[0][0];
+        const sanitizedVal = sanitizeCellValue(rawVal, targetCol);
+        const existingRow = getRowAtIndex(activeCell.rowIdx);
+
+        try {
+          await onUpdateCell(existingRow.id, activeCell.colId, sanitizedVal, activeCell.rowIdx);
+        } catch (err) {
+          console.error("Single cell paste error:", err);
+        }
+        return;
+      }
+
+      // 2. SINGLE VALUE PASTE TO MULTI-CELL RANGE:
       // If a single value is copied and multiple cells are highlighted, fill the entire range
       if (isSingleValue && isMultiCell && selectionRange) {
-        const singleVal = parsedGrid[0][0];
+        const rawVal = parsedGrid[0][0];
 
         // Expand rows dynamically if selection extends beyond totalRowCount
         if (selectionRange.endRow >= totalRowCount) {
@@ -1311,7 +1356,7 @@ export function SpreadsheetGrid({
           for (let c = selectionRange.startCol; c <= selectionRange.endCol; c++) {
             const col = sheet.columns[c];
             if (col) {
-              rowData[col.id] = singleVal;
+              rowData[col.id] = sanitizeCellValue(rawVal, col);
             }
           }
 
@@ -1324,12 +1369,16 @@ export function SpreadsheetGrid({
         }
 
         if (rowsToUpsert.length > 0) {
-          await onBatchUpdateRows(rowsToUpsert);
+          try {
+            await onBatchUpdateRows(rowsToUpsert);
+          } catch (err) {
+            console.error("Batch range paste error:", err);
+          }
         }
         return;
       }
 
-      // 2. MATRIX PASTE RETENTION (Excel / Google Sheets multi-cell grid paste):
+      // 3. MATRIX PASTE RETENTION (Excel / Google Sheets multi-cell grid paste):
       // Paste matrix starting from the top-left active cell
       const startRowIdx = activeCell.rowIdx;
       const startColIdx = sheet.columns.findIndex((c) => c.id === activeCell.colId);
@@ -1353,7 +1402,7 @@ export function SpreadsheetGrid({
           const targetColIdx = startColIdx + cOffset;
           if (targetColIdx < sheet.columns.length) {
             const col = sheet.columns[targetColIdx];
-            rowData[col.id] = val;
+            rowData[col.id] = sanitizeCellValue(val, col);
           }
         });
 
@@ -1366,7 +1415,11 @@ export function SpreadsheetGrid({
       });
 
       if (rowsToUpsert.length > 0) {
-        await onBatchUpdateRows(rowsToUpsert);
+        try {
+          await onBatchUpdateRows(rowsToUpsert);
+        } catch (err) {
+          console.error("Matrix paste batch error:", err);
+        }
       }
     },
     [
@@ -1378,6 +1431,8 @@ export function SpreadsheetGrid({
       sheet.id,
       totalRowCount,
       rowsByOrder,
+      getRowAtIndex,
+      onUpdateCell,
       onBatchUpdateRows,
     ]
   );
@@ -1701,6 +1756,7 @@ export function SpreadsheetGrid({
                   editValue={editValue}
                   onEditValueChange={setEditValue}
                   onCommitEdit={commitEdit}
+                  onCellPaste={handleCellPaste}
                   editInputRef={editInputRef}
                   onRowHeaderClick={handleRowHeaderClick}
                   onRowContextMenu={handleRowContextMenu}

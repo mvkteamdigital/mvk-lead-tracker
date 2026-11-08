@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "../auth/AuthContext";
 import { SheetMeta, SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
-import { isValidLead, getLeadStatus, isUnattendedLead, rowMatchesStatusFilter, rowMatchesDateFilter } from "@/lib/leads";
+import { isValidLead, getLeadStatus, isUnattendedLead, rowMatchesStatusFilter, rowMatchesDateFilter, sanitizeCellValue } from "@/lib/leads";
 import { HARDCODED_STATUS_FILTERS } from "@/lib/defaults";
 import { TopToolbar } from "./TopToolbar";
 import { StatusFilterBar } from "./StatusFilterBar";
@@ -18,7 +18,7 @@ import { ForceChangePasswordModal } from "../modals/ForceChangePasswordModal";
 import { ManageTeamAccountsModal } from "../modals/ManageTeamAccountsModal";
 import { LeadFormModal } from "../modals/LeadFormModal";
 import { MobileLeadListView } from "../mobile/MobileLeadListView";
-import { AlertCircle, RefreshCw, FileSpreadsheet } from "lucide-react";
+import { AlertCircle, RefreshCw, FileSpreadsheet, CheckCircle2, X } from "lucide-react";
 
 export function SpreadsheetApp() {
   const { user } = useAuth();
@@ -51,6 +51,17 @@ export function SpreadsheetApp() {
   const [isManageAccountsModalOpen, setIsManageAccountsModalOpen] = useState(false);
   const [isLeadFormModalOpen, setIsLeadFormModalOpen] = useState(false);
   const [editingLeadForModal, setEditingLeadForModal] = useState<RowData | null>(null);
+
+  // Lightweight Toast Notification system (eliminates native alerts and page reloads)
+  const [toast, setToast] = useState<{ id: number; message: string; type: "success" | "error" | "info" } | null>(null);
+
+  const showToast = useCallback((message: string, type: "success" | "error" | "info" = "info") => {
+    const id = Date.now();
+    setToast({ id, message, type });
+    setTimeout(() => {
+      setToast((current) => (current?.id === id ? null : current));
+    }, 4500);
+  }, []);
 
   // Active users state for live tab synchronization
   const [usersList, setUsersList] = useState<Array<{ id: string; name: string; email: string; role: string }>>([]);
@@ -428,6 +439,27 @@ export function SpreadsheetApp() {
     }
   }, [activeSheetId, isRefreshing]);
 
+  // Silent background refresh for seamless error recovery without unmounting or setting loading spinner
+  const silentRefreshActiveSheet = useCallback(async (sheetId: string) => {
+    try {
+      const res = await fetch(`/api/sheets/${sheetId}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.sheet) {
+        setActiveSheet((prev) => {
+          if (!prev || prev.id !== sheetId) return prev;
+          return {
+            ...prev,
+            columns: data.sheet.columns,
+            rows: data.sheet.rows,
+          };
+        });
+      }
+    } catch (err) {
+      console.error("Silent background refresh error:", err);
+    }
+  }, []);
+
   // Synchronized Multi-User Access: Polling every 15 seconds so CEO / Admins and members stay in sync
   useEffect(() => {
     if (!activeSheetId) return;
@@ -471,6 +503,8 @@ export function SpreadsheetApp() {
 
     pushUndoSnapshot();
 
+    const colDef = activeSheet.columns.find((c) => c.id === columnId);
+    const sanitizedValue = sanitizeCellValue(value, colDef);
     const rowOrder = order !== undefined ? order : activeCell?.rowIdx ?? 0;
 
     // Optimistically update local state immediately for zero-lag UI
@@ -496,7 +530,7 @@ export function SpreadsheetApp() {
         const nextRows = [...prev.rows];
         nextRows[targetIndex] = {
           ...existing,
-          data: { ...existing.data, [columnId]: value },
+          data: { ...existing.data, [columnId]: sanitizedValue },
         };
         return {
           ...prev,
@@ -509,7 +543,7 @@ export function SpreadsheetApp() {
         id: rowId,
         sheetId: prev.id,
         order: rowOrder,
-        data: { [columnId]: value },
+        data: { [columnId]: sanitizedValue },
         styles: {},
         createdAt: new Date().toISOString(),
       };
@@ -529,17 +563,20 @@ export function SpreadsheetApp() {
           rowId: rowId.startsWith("temp_") ? undefined : rowId,
           order: rowOrder,
           columnId,
-          value,
+          value: sanitizedValue,
         }),
       });
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         if (res.status === 409) {
-          alert(`⚠️ ${errData.error || "Duplicate Lead detected."}`);
+          showToast(`⚠️ ${errData.error || "Duplicate Lead detected."}`, "error");
+        } else {
+          showToast(errData.error || "Failed to save cell data.", "error");
         }
-        await fetchActiveSheetDetail(activeSheet.id);
-        throw new Error(errData.error || "Failed to save cell");
+        silentRefreshActiveSheet(activeSheet.id);
+        setSavingStatus("error");
+        return;
       }
       const data = await res.json();
       if (data.row) {
@@ -562,8 +599,10 @@ export function SpreadsheetApp() {
         });
       }
       setSavingStatus("saved");
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error("Cell save error:", err);
+      showToast("Network error: Could not save changes.", "error");
+      silentRefreshActiveSheet(activeSheet.id);
       setSavingStatus("error");
     }
   };
@@ -574,13 +613,28 @@ export function SpreadsheetApp() {
 
     pushUndoSnapshot();
 
+    // Sanitize incoming rows data against column definitions
+    const sanitizedRows = rows.map((r) => {
+      const incomingData = typeof r.data === "string" ? JSON.parse(r.data) : r.data || {};
+      const cleanData: Record<string, any> = { ...incomingData };
+      activeSheet.columns.forEach((c) => {
+        if (cleanData[c.id] !== undefined) {
+          cleanData[c.id] = sanitizeCellValue(cleanData[c.id], c);
+        }
+      });
+      return {
+        ...r,
+        data: cleanData,
+      };
+    });
+
     // Optimistically update local state immediately with immutable row copies
     setActiveSheet((prev) => {
       if (!prev) return prev;
       const newRows = [...prev.rows];
 
-      rows.forEach((r) => {
-        const incomingData = typeof r.data === "string" ? JSON.parse(r.data) : r.data || {};
+      sanitizedRows.forEach((r) => {
+        const incomingData = r.data || {};
         let targetIndex = -1;
         if (r.id && !r.id.startsWith("temp_")) {
           targetIndex = newRows.findIndex((row) => row.id === r.id);
@@ -633,13 +687,19 @@ export function SpreadsheetApp() {
       const res = await fetch(`/api/sheets/${activeSheet.id}/rows`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows }),
+        body: JSON.stringify({ rows: sanitizedRows }),
       });
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        await fetchActiveSheetDetail(activeSheet.id);
-        throw new Error(errData.error || "Failed to save rows");
+        if (res.status === 409) {
+          showToast(`⚠️ ${errData.error || "Duplicate Lead detected during paste."}`, "error");
+        } else {
+          showToast(errData.error || "Failed to save pasted data.", "error");
+        }
+        silentRefreshActiveSheet(activeSheet.id);
+        setSavingStatus("error");
+        return;
       }
       const data = await res.json();
       if (data.rows) {
@@ -662,8 +722,10 @@ export function SpreadsheetApp() {
         });
       }
       setSavingStatus("saved");
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      console.error("Batch update error:", err);
+      showToast("Network error: Failed to save pasted data.", "error");
+      silentRefreshActiveSheet(activeSheet.id);
       setSavingStatus("error");
     }
   };
@@ -980,9 +1042,12 @@ export function SpreadsheetApp() {
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         if (res.status === 409) {
-          alert(`⚠️ ${errData.error || "Duplicate Lead detected."}`);
+          showToast(`⚠️ ${errData.error || "Duplicate Lead detected."}`, "error");
+        } else {
+          showToast(errData.error || "Failed to save lead.", "error");
         }
-        await fetchActiveSheetDetail(activeSheet.id);
+        silentRefreshActiveSheet(activeSheet.id);
+        setSavingStatus("error");
         throw new Error(errData.error || "Failed to save lead");
       }
 
@@ -1336,6 +1401,32 @@ export function SpreadsheetApp() {
           userName={user.name}
           onSuccess={() => fetchSheets()}
         />
+      )}
+
+      {/* Lightweight Floating Toast Notification (No Page Reloads) */}
+      {toast && (
+        <div
+          className={`fixed bottom-12 right-6 z-50 flex items-center gap-2.5 px-4 py-2.5 rounded-xl shadow-2xl text-xs font-semibold border transition-all ${
+            toast.type === "error"
+              ? "bg-rose-950 text-rose-100 border-rose-800 shadow-rose-950/50"
+              : toast.type === "success"
+              ? "bg-emerald-950 text-emerald-100 border-emerald-800 shadow-emerald-950/50"
+              : "bg-slate-900 text-slate-100 border-slate-700 shadow-slate-950/50"
+          }`}
+        >
+          {toast.type === "error" ? (
+            <AlertCircle className="h-4 w-4 text-rose-400 shrink-0" />
+          ) : (
+            <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0" />
+          )}
+          <span className="max-w-xs sm:max-w-md truncate">{toast.message}</span>
+          <button
+            onClick={() => setToast(null)}
+            className="ml-2 text-slate-400 hover:text-white p-0.5 rounded transition-colors"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
       )}
 
     </div>
