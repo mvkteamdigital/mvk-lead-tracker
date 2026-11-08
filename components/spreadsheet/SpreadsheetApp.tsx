@@ -620,7 +620,7 @@ export function SpreadsheetApp() {
     }
   };
 
-  // 4. Batch Rows Update (Supports multi-row paste from Excel / Google Sheets)
+  // 4. Batch Rows Update (Supports multi-row & multi-column bulk paste from Excel / Google Sheets)
   const handleBatchUpdateRows = async (rows: Partial<RowData>[]) => {
     const currentSheet = activeSheetRef.current || activeSheet;
     if (!currentSheet) return;
@@ -642,7 +642,7 @@ export function SpreadsheetApp() {
       };
     });
 
-    // Optimistically update local state immediately with immutable row copies
+    // Optimistically update local state immediately with ONE single batched React update
     setActiveSheet((prev) => {
       if (!prev) return prev;
       const newRows = [...prev.rows];
@@ -655,6 +655,9 @@ export function SpreadsheetApp() {
         }
         if (targetIndex === -1 && r.order !== undefined) {
           targetIndex = newRows.findIndex((row) => row.order === r.order);
+        }
+        if (targetIndex === -1 && r.id && r.id.startsWith("temp_")) {
+          targetIndex = newRows.findIndex((row) => row.id === r.id);
         }
 
         if (targetIndex >= 0 && targetIndex < newRows.length) {
@@ -684,51 +687,117 @@ export function SpreadsheetApp() {
 
     setSavingStatus("saving");
 
-    try {
-      const res = await fetch(`/api/sheets/${currentSheet.id}/rows`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          rows: sanitizedRows,
-          userId: currentSheet.userId || undefined,
-        }),
-      });
+    // Group rows: updated existing rows vs newly created rows
+    const existingRowsToUpdate = sanitizedRows.filter((r) => r.id && !r.id.startsWith("temp_"));
+    const newRowsToCreate = sanitizedRows.filter((r) => !r.id || r.id.startsWith("temp_"));
 
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        if (res.status === 409) {
-          showToast(`⚠️ ${errData.error || "Duplicate Lead detected during paste."}`, "error");
-        } else {
-          showToast(errData.error || "Failed to save pasted data.", "error");
+    try {
+      const [updateRes, createRes] = await Promise.all([
+        existingRowsToUpdate.length > 0
+          ? fetch("/api/leads/bulk", {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                leads: existingRowsToUpdate,
+                sheetId: currentSheet.id,
+              }),
+            })
+          : null,
+        newRowsToCreate.length > 0
+          ? fetch("/api/leads/bulk", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                leads: newRowsToCreate,
+                sheetId: currentSheet.id,
+                userId: currentSheet.userId || undefined,
+              }),
+            })
+          : null,
+      ]);
+
+      const allDuplicates: any[] = [];
+      let totalSaved = 0;
+
+      // Process newly created rows and swap temporary optimistic IDs with real database IDs
+      if (createRes) {
+        if (!createRes.ok) {
+          const errData = await createRes.json().catch(() => ({}));
+          throw new Error(errData.error || "Failed to create new leads");
         }
-        silentRefreshActiveSheet(currentSheet.id);
-        setSavingStatus("error");
-        return;
-      }
-      const data = await res.json();
-      if (data.rows) {
-        setActiveSheet((prev) => {
-          if (!prev) return prev;
-          const idMap = new Map<string, RowData>();
-          const orderMap = new Map<number, RowData>();
-          data.rows.forEach((r: RowData) => {
-            if (r.id && !r.id.startsWith("temp_")) idMap.set(r.id, r);
-            if (r.order !== undefined) orderMap.set(r.order, r);
+        const createData = await createRes.json();
+        totalSaved += createData.count || 0;
+        if (createData.duplicates && createData.duplicates.length > 0) {
+          allDuplicates.push(...createData.duplicates);
+        }
+
+        if (createData.created && createData.created.length > 0) {
+          setActiveSheet((prev) => {
+            if (!prev) return prev;
+            const tempIdMap = new Map<string, RowData>();
+            const orderMap = new Map<number, RowData>();
+
+            createData.created.forEach((r: RowData & { tempId?: string }) => {
+              if (r.tempId) tempIdMap.set(r.tempId, r);
+              if (r.order !== undefined) orderMap.set(r.order, r);
+            });
+
+            return {
+              ...prev,
+              rows: prev.rows.map((r) => {
+                if (r.id && tempIdMap.has(r.id)) {
+                  return { ...r, ...tempIdMap.get(r.id)! };
+                }
+                if (r.id && r.id.startsWith("temp_") && r.order !== undefined && orderMap.has(r.order)) {
+                  return { ...r, ...orderMap.get(r.order)! };
+                }
+                return r;
+              }),
+            };
           });
-          return {
-            ...prev,
-            rows: prev.rows.map((r) => {
-              if (r.id && idMap.has(r.id)) return idMap.get(r.id)!;
-              if (r.order !== undefined && orderMap.has(r.order)) return orderMap.get(r.order)!;
-              return r;
-            }),
-          };
-        });
+        }
       }
+
+      // Process updated existing rows
+      if (updateRes) {
+        if (!updateRes.ok) {
+          const errData = await updateRes.json().catch(() => ({}));
+          throw new Error(errData.error || "Failed to update existing leads");
+        }
+        const updateData = await updateRes.json();
+        totalSaved += updateData.count || 0;
+        if (updateData.duplicates && updateData.duplicates.length > 0) {
+          allDuplicates.push(...updateData.duplicates);
+        }
+
+        if (updateData.updated && updateData.updated.length > 0) {
+          setActiveSheet((prev) => {
+            if (!prev) return prev;
+            const updatedMap = new Map<string, RowData>();
+            updateData.updated.forEach((r: RowData) => {
+              updatedMap.set(r.id, r);
+            });
+            return {
+              ...prev,
+              rows: prev.rows.map((r) => (updatedMap.has(r.id) ? { ...r, ...updatedMap.get(r.id)! } : r)),
+            };
+          });
+        }
+      }
+
+      if (allDuplicates.length > 0) {
+        showToast(
+          `Pasted ${totalSaved} lead(s). ${allDuplicates.length} duplicate phone number(s) skipped.`,
+          "info"
+        );
+      } else if (totalSaved > 0) {
+        showToast(`✓ Successfully pasted and saved ${totalSaved} lead(s).`, "success");
+      }
+
       setSavingStatus("saved");
     } catch (err: any) {
       console.error("Batch update error:", err);
-      showToast("Network error: Failed to save pasted data.", "error");
+      showToast(err.message || "Failed to save pasted data.", "error");
       silentRefreshActiveSheet(currentSheet.id);
       setSavingStatus("error");
     }

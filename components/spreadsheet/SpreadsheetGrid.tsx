@@ -1292,24 +1292,25 @@ export function SpreadsheetGrid({
       const currentSheet = sheetRef.current || sheet;
       if (!currentActive) return;
 
-      const clipboardText = e.clipboardData.getData("text/plain");
-      if (!clipboardText) return;
+      const rawText = e.clipboardData.getData("text/plain");
+      if (!rawText) return;
 
-      // Parse TSV lines from Excel / Google Sheets
-      const rawLines = clipboardText.split(/\r\n|\n/);
-      // Remove trailing empty newline if present
-      if (rawLines.length > 1 && rawLines[rawLines.length - 1] === "") {
-        rawLines.pop();
+      // 1. Split into rows by newline, handling CRLF (\r\n) and CR (\r)
+      const rows = rawText.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+      // Remove trailing empty row caused by Google Sheets' trailing newline
+      if (rows.length > 1 && rows[rows.length - 1] === "") {
+        rows.pop();
       }
-      if (rawLines.length === 0) return;
+      if (rows.length === 0) return;
 
       // If user was actively editing a cell, close edit mode cleanly
       if (editingCell) {
         setEditingCell(null);
       }
 
-      const parsedGrid = rawLines.map((line) => {
-        return line.split("\t").map((cell) => {
+      // 2. Split each row into columns by tab
+      const matrix = rows.map((row) => {
+        return row.split("\t").map((cell) => {
           let val = cell.trim();
           if (val.startsWith('"') && val.endsWith('"') && val.length >= 2) {
             val = val.substring(1, val.length - 1).replace(/""/g, '"');
@@ -1318,27 +1319,32 @@ export function SpreadsheetGrid({
         });
       });
 
-      const isSingleValue = parsedGrid.length === 1 && parsedGrid[0].length === 1;
+      // Determine starting coordinates from currently focused cell
+      const startRowIndex = currentActive.rowIdx;
+      let startColIndex = currentSheet.columns.findIndex((c) => c.id === currentActive.colId);
+      if (startColIndex === -1) startColIndex = 0;
 
-      // 1. SINGLE CELL PASTE (Single value pasted into single active cell)
+      const isSingleValue = matrix.length === 1 && matrix[0].length === 1;
+
+      // Case A: SINGLE CELL PASTE (Single value pasted into single active cell)
       if (isSingleValue && !isMultiCell) {
-        const targetCol = currentSheet.columns.find((c) => c.id === currentActive.colId);
-        const rawVal = parsedGrid[0][0];
+        const targetCol = currentSheet.columns[startColIndex];
+        const rawVal = matrix[0][0];
         const sanitizedVal = sanitizeCellValue(rawVal, targetCol);
-        const existingRow = getRowAtIndex(currentActive.rowIdx);
+        const existingRow = getRowAtIndex(startRowIndex);
 
         try {
-          await onUpdateCell(existingRow.id, currentActive.colId, sanitizedVal, currentActive.rowIdx);
+          await onUpdateCell(existingRow.id, currentActive.colId, sanitizedVal, startRowIndex);
         } catch (err) {
           console.error("Single cell paste error:", err);
         }
         return;
       }
 
-      // 2. SINGLE VALUE PASTE TO MULTI-CELL RANGE:
+      // Case B: SINGLE VALUE PASTE TO MULTI-CELL RANGE:
       // If a single value is copied and multiple cells are highlighted, fill the entire range
       if (isSingleValue && isMultiCell && selectionRange) {
-        const rawVal = parsedGrid[0][0];
+        const rawVal = matrix[0][0];
 
         // Expand rows dynamically if selection extends beyond totalRowCount
         if (selectionRange.endRow >= totalRowCount) {
@@ -1348,7 +1354,8 @@ export function SpreadsheetGrid({
         const rowsToUpsert: Partial<RowData>[] = [];
 
         for (let r = selectionRange.startRow; r <= selectionRange.endRow; r++) {
-          const existingRow = rowsByOrder.get(r);
+          const existingRow = rowsByOrder.get(r) || currentSheet.rows[r];
+          const isExistingInDb = Boolean(existingRow && existingRow.id && !existingRow.id.startsWith("temp_"));
           const rowData = existingRow ? { ...existingRow.data } : {};
 
           for (let c = selectionRange.startCol; c <= selectionRange.endCol; c++) {
@@ -1358,11 +1365,16 @@ export function SpreadsheetGrid({
             }
           }
 
+          const rowId = isExistingInDb
+            ? existingRow.id
+            : (existingRow?.id || `temp_${Date.now()}_${r}_${Math.random().toString(36).substring(2, 7)}`);
+
           rowsToUpsert.push({
-            id: existingRow ? existingRow.id : `temp_${r}`,
+            id: rowId,
             sheetId: currentSheet.id,
             order: r,
             data: rowData,
+            styles: existingRow?.styles || {},
           });
         }
 
@@ -1376,39 +1388,49 @@ export function SpreadsheetGrid({
         return;
       }
 
-      // 3. MATRIX PASTE RETENTION (Excel / Google Sheets multi-cell grid paste):
-      // Paste matrix starting from the top-left active cell
-      const startRowIdx = currentActive.rowIdx;
-      const startColIdx = currentSheet.columns.findIndex((c) => c.id === currentActive.colId);
-      if (startColIdx === -1) return;
-
-      // Expand rows dynamically if paste exceeds current row count
-      const requiredRows = startRowIdx + parsedGrid.length;
+      // Case C: 2D MATRIX BULK PASTE (Multi-row and/or multi-column from Google Sheets / Excel)
+      // Expand total row count dynamically if paste extends beyond currently rendered rows
+      const requiredRows = startRowIndex + matrix.length;
       if (requiredRows > totalRowCount) {
         setExpandedRowCount(requiredRows + 50);
       }
 
-      // Build batch updates
       const rowsToUpsert: Partial<RowData>[] = [];
 
-      parsedGrid.forEach((rowVals, rOffset) => {
-        const targetRowIdx = startRowIdx + rOffset;
-        const existingRow = rowsByOrder.get(targetRowIdx);
-        const rowData = existingRow ? { ...existingRow.data } : {};
+      matrix.forEach((rowVals, rowOffset) => {
+        const targetRowIndex = startRowIndex + rowOffset;
+        const existingRow = rowsByOrder.get(targetRowIndex) || currentSheet.rows[targetRowIndex];
+        const isExistingInDb = Boolean(existingRow && existingRow.id && !existingRow.id.startsWith("temp_"));
 
-        rowVals.forEach((val, cOffset) => {
-          const targetColIdx = startColIdx + cOffset;
-          if (targetColIdx < currentSheet.columns.length) {
-            const col = currentSheet.columns[targetColIdx];
-            rowData[col.id] = sanitizeCellValue(val, col);
+        // If targetRowIndex exists in current tab's leads: update existing lead fields
+        // If targetRowIndex exceeds existing rows or lands on empty rows: create new lead pre-assigned to active sheet
+        const rowData: Record<string, any> = isExistingInDb
+          ? { ...existingRow.data }
+          : existingRow
+          ? { ...existingRow.data }
+          : {};
+
+        // Map column values across editable columns, ignoring read-only columns like #
+        rowVals.forEach((val, colOffset) => {
+          const targetColIndex = startColIndex + colOffset;
+          if (targetColIndex < currentSheet.columns.length) {
+            const col = currentSheet.columns[targetColIndex];
+            if (col) {
+              rowData[col.id] = sanitizeCellValue(val, col);
+            }
           }
         });
 
+        const rowId = isExistingInDb
+          ? existingRow.id
+          : (existingRow?.id || `temp_${Date.now()}_${targetRowIndex}_${Math.random().toString(36).substring(2, 7)}`);
+
         rowsToUpsert.push({
-          id: existingRow ? existingRow.id : `temp_${targetRowIdx}`,
+          id: rowId,
           sheetId: currentSheet.id,
-          order: targetRowIdx,
+          order: targetRowIndex,
           data: rowData,
+          styles: existingRow?.styles || {},
         });
       });
 
