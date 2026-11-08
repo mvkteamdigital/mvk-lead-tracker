@@ -7,6 +7,7 @@ import {
   getLeadSource,
   getLeadStatus,
   isUnattendedLead,
+  isFollowupEmpty,
   rowMatchesStatusFilter,
   rowMatchesDateFilter,
   formatDateDisplay,
@@ -41,6 +42,7 @@ interface MobileLeadCardProps {
   columns: ColumnDef[];
   onEditLead: (row: RowData) => void;
   onUpdateCell?: (rowId: string, columnId: string, value: string, order?: number) => Promise<void>;
+  onUpdateLead?: (rowId: string, data: Record<string, string>, order?: number) => Promise<void>;
 }
 
 const MobileLeadCard = ({
@@ -48,6 +50,7 @@ const MobileLeadCard = ({
   columns,
   onEditLead,
   onUpdateCell,
+  onUpdateLead,
 }: MobileLeadCardProps) => {
   const nameCol = columns.find((c) => c.id === "col_name") || columns[4];
   const numberCol = columns.find((c) => c.id === "col_number") || columns[5];
@@ -76,20 +79,44 @@ const MobileLeadCard = ({
   const isUnattended = isUnattendedLead(lead.data, columns);
   const statusColors = currentStatus !== "Unassigned" ? STATUS_COLORS[currentStatus] : null;
 
-  // Target follow-up column for status updates (defaulting to col_followup_1)
-  const followupCol =
-    columns.find(
-      (c) =>
-        c.type === "dropdown" &&
-        (c.id.includes("followup") || c.name.toLowerCase().includes("follow up")) &&
-        !c.id.includes("date") &&
-        !c.name.toLowerCase().includes("date")
-    ) || { id: "col_followup_1", name: "1st Follow Up", options: DEFAULT_FOLLOWUP_OPTIONS };
+  // Find all follow-up status dropdown columns in sequential order (1st, 2nd, 3rd, 4th)
+  const followUpCols = useMemo(() => {
+    return (columns || []).filter((c) => {
+      const idLower = c.id.toLowerCase();
+      const nameLower = c.name.toLowerCase();
+      if (idLower.includes("source") || nameLower.includes("source")) return false;
+      if (idLower.includes("budget") || nameLower.includes("budget")) return false;
+      if (idLower.includes("date") || nameLower.includes("date")) return false;
+      return (
+        (c.type === "dropdown" && (idLower.includes("followup") || nameLower.includes("follow up"))) ||
+        idLower.includes("followup")
+      );
+    });
+  }, [columns]);
 
-  const followupOptions =
-    followupCol.options && followupCol.options.length > 0
-      ? followupCol.options
+  // Find the active follow-up column (the latest one that has a recorded status, matching getLeadStatus)
+  const activeFollowupCol = useMemo(() => {
+    for (let i = followUpCols.length - 1; i >= 0; i--) {
+      const col = followUpCols[i];
+      const val = lead.data[col.id];
+      if (val !== undefined && val !== null && !isFollowupEmpty(val)) {
+        return col;
+      }
+    }
+    return (
+      followUpCols[0] || {
+        id: "col_followup_1",
+        name: "1st Follow Up",
+        options: DEFAULT_FOLLOWUP_OPTIONS,
+      }
+    );
+  }, [followUpCols, lead.data]);
+
+  const followupOptions = useMemo(() => {
+    return activeFollowupCol.options && activeFollowupCol.options.length > 0
+      ? activeFollowupCol.options
       : DEFAULT_FOLLOWUP_OPTIONS;
+  }, [activeFollowupCol]);
 
   return (
     <div
@@ -134,10 +161,26 @@ const MobileLeadCard = ({
               {onUpdateCell && (
                 <select
                   value={!isUnattended && currentStatus !== "Unassigned" ? currentStatus : ""}
-                  onChange={(e) => {
+                  onChange={async (e) => {
                     e.stopPropagation();
                     const newStatus = e.target.value;
-                    onUpdateCell(lead.id, followupCol.id, newStatus, lead.order);
+                    if (!newStatus) {
+                      // User selected Unattended / Clear status -> clear all follow-up columns so lead is truly unattended!
+                      if (onUpdateLead) {
+                        const cleared: Record<string, string> = {};
+                        followUpCols.forEach((col) => {
+                          cleared[col.id] = "";
+                        });
+                        await onUpdateLead(lead.id, cleared, lead.order);
+                      } else if (onUpdateCell) {
+                        await onUpdateCell(lead.id, activeFollowupCol.id, "", lead.order);
+                      }
+                    } else {
+                      // Update the active follow-up column (or 1st follow up if unattended)
+                      if (onUpdateCell) {
+                        await onUpdateCell(lead.id, activeFollowupCol.id, newStatus, lead.order);
+                      }
+                    }
                   }}
                   onClick={(e) => e.stopPropagation()}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer text-xs"
@@ -235,6 +278,7 @@ const MemoizedMobileLeadCard = React.memo(
     if (prev.lead.createdAt !== next.lead.createdAt) return false;
     if (prev.columns !== next.columns) return false;
     if (prev.onUpdateCell !== next.onUpdateCell) return false;
+    if (prev.onUpdateLead !== next.onUpdateLead) return false;
     if (prev.onEditLead !== next.onEditLead) return false;
     return true;
   }
@@ -263,6 +307,7 @@ export function MobileLeadListView({
   onEditLead,
   onAddNewLead,
   onUpdateCell,
+  onUpdateLead,
 }: MobileLeadListViewProps) {
   // Filter only rows that have actual valid lead data (name, number, project, or other non-empty field)
   // in their default sequential order as returned from the database
@@ -385,6 +430,7 @@ export function MobileLeadListView({
               columns={sheet.columns}
               onEditLead={onEditLead}
               onUpdateCell={onUpdateCell}
+              onUpdateLead={onUpdateLead}
             />
           ))
         )}
