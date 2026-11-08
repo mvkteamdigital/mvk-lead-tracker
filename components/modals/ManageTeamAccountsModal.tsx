@@ -46,12 +46,14 @@ interface ManageTeamAccountsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onRefreshSheets?: () => void;
+  onUserUpdated?: (user: any) => void;
 }
 
 export function ManageTeamAccountsModal({
   isOpen,
   onClose,
   onRefreshSheets,
+  onUserUpdated,
 }: ManageTeamAccountsModalProps) {
   const { user } = useAuth();
 
@@ -164,6 +166,12 @@ export function ManageTeamAccountsModal({
       setNewMemberSheetOption("new");
       setIsAddMemberOpen(false);
 
+      // Immediately update local state array with returned user object
+      if (data.user) {
+        setUsers((prev) => [...prev, data.user]);
+        if (onUserUpdated) onUserUpdated(data.user);
+      }
+
       // Refresh list immediately without page reload
       await fetchData();
       if (onRefreshSheets) onRefreshSheets();
@@ -220,6 +228,17 @@ export function ManageTeamAccountsModal({
         msg: `Member details for "${editName.trim()}" updated successfully!`,
       });
       setEditingUser(null);
+
+      // Immediately invalidate and update local state array with returned updated user object
+      if (data.user) {
+        setUsers((prev) =>
+          prev.map((u) => (u.id === data.user.id ? { ...u, ...data.user } : u))
+        );
+        if (onUserUpdated) {
+          onUserUpdated(data.user);
+        }
+      }
+
       await fetchData();
       if (onRefreshSheets) onRefreshSheets();
     } catch (err: any) {

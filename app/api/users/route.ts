@@ -259,6 +259,11 @@ export async function PUT(req: Request) {
 
     if (name !== undefined && name.trim()) {
       updateData.name = name.trim();
+      // Synchronize sheet names: update all sheets assigned to this user in DB
+      await prisma.sheet.updateMany({
+        where: { userId },
+        data: { name: name.trim() },
+      });
     }
 
     if (newPassword !== undefined && newPassword.trim()) {
@@ -286,7 +291,10 @@ export async function PUT(req: Request) {
         });
         await prisma.sheet.update({
           where: { id: sheetId },
-          data: { userId },
+          data: {
+            userId,
+            ...(name && name.trim() ? { name: name.trim() } : {}),
+          },
         });
       }
     }

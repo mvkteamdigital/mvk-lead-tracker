@@ -167,10 +167,12 @@ export async function GET(req: Request, { params }: Params) {
       };
     });
 
+    const displayName = (sheet.user?.name && sheet.user.name.trim()) ? sheet.user.name.trim() : sheet.name;
+
     return NextResponse.json({
       sheet: {
         id: sheet.id,
-        name: sheet.name,
+        name: displayName,
         userId: sheet.userId,
         order: sheet.order,
         columns: parsedCols,
@@ -217,7 +219,20 @@ export async function PUT(req: Request, { params }: Params) {
     const updateData: any = {};
 
     if (body.name !== undefined) {
-      updateData.name = body.name.trim();
+      const trimmedName = body.name.trim();
+      updateData.name = trimmedName;
+
+      // If sheet is assigned to a user, sync user's name as well
+      const existingSheet = await prisma.sheet.findUnique({
+        where: { id },
+        select: { userId: true },
+      });
+      if (existingSheet?.userId) {
+        await prisma.user.update({
+          where: { id: existingSheet.userId },
+          data: { name: trimmedName },
+        }).catch(console.error);
+      }
     }
     if (body.columns !== undefined) {
       const colsStr = typeof body.columns === "string" ? body.columns : JSON.stringify(body.columns);

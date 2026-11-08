@@ -52,6 +52,37 @@ export function SpreadsheetApp() {
   const [isLeadFormModalOpen, setIsLeadFormModalOpen] = useState(false);
   const [editingLeadForModal, setEditingLeadForModal] = useState<RowData | null>(null);
 
+  // Active users state for live tab synchronization
+  const [usersList, setUsersList] = useState<Array<{ id: string; name: string; email: string; role: string }>>([]);
+
+  const fetchUsers = useCallback(async () => {
+    try {
+      const res = await fetch("/api/users");
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.users && Array.isArray(data.users)) {
+        setUsersList(data.users);
+      }
+    } catch (e) {
+      console.error("Failed to fetch users list", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (user?.role === "ADMIN") {
+      fetchUsers();
+    }
+  }, [user?.role, fetchUsers]);
+
+  // Fast map by user ID for instant O(1) reactive lookup
+  const usersById = useMemo(() => {
+    const map = new Map<string, { id: string; name: string; email: string; role: string }>();
+    usersList.forEach((u) => {
+      map.set(u.id, u);
+    });
+    return map;
+  }, [usersList]);
+
   // Dynamic Status & Date Filter state
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [dateFilter, setDateFilter] = useState<string | null>(null);
@@ -104,18 +135,36 @@ export function SpreadsheetApp() {
     return counts;
   }, [activeSheet, activeSheetDateFilteredRows]);
 
-  // Derived state: sheet list with reactive real-time valid lead count for the active tab
+  // Derived state: sheet list with reactive real-time valid lead count for the active tab,
+  // pulling tab labels directly from the active, fetched user list state!
   const displayedSheets = useMemo(() => {
     return sheets.map((s) => {
-      if (activeSheet && s.id === activeSheet.id) {
-        return {
-          ...s,
-          rowCount: activeSheetValidLeadCount,
-        };
-      }
-      return s;
+      // Pull dynamic tab label directly from the active fetched user list state if sheet is assigned
+      const linkedUser = s.userId ? usersById.get(s.userId) : null;
+      const dynamicName = linkedUser?.name?.trim() || s.user?.name?.trim() || s.name;
+
+      return {
+        ...s,
+        name: dynamicName,
+        rowCount:
+          activeSheet && s.id === activeSheet.id
+            ? activeSheetValidLeadCount
+            : s.rowCount,
+      };
     });
-  }, [sheets, activeSheet, activeSheetValidLeadCount]);
+  }, [sheets, usersById, activeSheet, activeSheetValidLeadCount]);
+
+  // Active sheet with reactive dynamic name pulled directly from user state
+  const currentActiveSheet = useMemo(() => {
+    if (!activeSheet) return null;
+    const linkedUser = activeSheet.userId ? usersById.get(activeSheet.userId) : null;
+    const dynamicName = linkedUser?.name?.trim() || activeSheet.user?.name?.trim() || activeSheet.name;
+    if (dynamicName === activeSheet.name) return activeSheet;
+    return {
+      ...activeSheet,
+      name: dynamicName,
+    };
+  }, [activeSheet, usersById]);
 
   // Keep the sheets list rowCount in sync with active sheet's valid lead count
   useEffect(() => {
@@ -230,6 +279,20 @@ export function SpreadsheetApp() {
 
       setSheets(fetchedSheets);
 
+      // Keep activeSheet in sync with latest sheet name and metadata
+      setActiveSheet((prev) => {
+        if (!prev) return prev;
+        const matching = fetchedSheets.find((s) => s.id === prev.id);
+        if (matching && (matching.name !== prev.name || matching.user?.name !== prev.user?.name)) {
+          return {
+            ...prev,
+            name: matching.name,
+            user: matching.user || prev.user,
+          };
+        }
+        return prev;
+      });
+
       if (fetchedSheets && fetchedSheets.length > 0) {
         // If no active sheet or active sheet was removed, select the first accessible sheet
         setActiveSheetId((prev) => {
@@ -251,6 +314,44 @@ export function SpreadsheetApp() {
   useEffect(() => {
     fetchSheets();
   }, [fetchSheets]);
+
+  // Instantly reflect user updates across tabs and active sheets without needing a reload
+  const handleUserUpdated = useCallback(
+    (updatedUser: { id: string; name: string; email: string; role: string }) => {
+      // 1. Instantly update active users state array
+      setUsersList((prev) =>
+        prev.map((u) => (u.id === updatedUser.id ? { ...u, ...updatedUser } : u))
+      );
+      // 2. Instantly update sheets list state
+      setSheets((prev) =>
+        prev.map((s) =>
+          s.userId === updatedUser.id
+            ? {
+                ...s,
+                name: updatedUser.name,
+                user: s.user ? { ...s.user, name: updatedUser.name } : s.user,
+              }
+            : s
+        )
+      );
+      // 3. Instantly update activeSheet state if it belongs to this user
+      setActiveSheet((prev) => {
+        if (!prev) return prev;
+        if (prev.userId === updatedUser.id) {
+          return {
+            ...prev,
+            name: updatedUser.name,
+            user: prev.user ? { ...prev.user, name: updatedUser.name } : prev.user,
+          };
+        }
+        return prev;
+      });
+      // 4. Background re-fetch to ensure full database consistency
+      fetchSheets();
+      fetchUsers();
+    },
+    [fetchSheets, fetchUsers]
+  );
 
   // 2. Fetch full detail (columns & rows) for active sheet
   const fetchActiveSheetDetail = useCallback(async (sheetId: string) => {
@@ -764,6 +865,13 @@ export function SpreadsheetApp() {
         if (activeSheet && activeSheet.id === id) {
           setActiveSheet((prev) => (prev ? { ...prev, name: newName } : prev));
         }
+        // Also update usersList if this sheet is assigned to a user
+        const targetSheet = sheets.find((s) => s.id === id);
+        if (targetSheet?.userId) {
+          setUsersList((prev) =>
+            prev.map((u) => (u.id === targetSheet.userId ? { ...u, name: newName } : u))
+          );
+        }
       }
     } catch (err) {
       console.error(err);
@@ -996,7 +1104,7 @@ export function SpreadsheetApp() {
       
       {/* 1. Top Application Toolbar */}
       <TopToolbar
-        sheet={activeSheet}
+        sheet={currentActiveSheet || activeSheet}
         savingStatus={savingStatus}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
@@ -1090,7 +1198,7 @@ export function SpreadsheetApp() {
             {/* Mobile View: Vertical Card List with Status & Date Indicators & Tap-to-Edit */}
             <div className="block md:hidden flex-1 overflow-hidden flex flex-col min-h-0">
               <MobileLeadListView
-                sheet={activeSheet}
+                sheet={currentActiveSheet || activeSheet}
                 searchQuery={searchQuery}
                 onSearchChange={setSearchQuery}
                 statusFilter={statusFilter}
@@ -1199,7 +1307,7 @@ export function SpreadsheetApp() {
           }}
           lead={editingLeadForModal}
           columns={activeSheet.columns}
-          sheetName={activeSheet.name}
+          sheetName={currentActiveSheet?.name || activeSheet.name}
           onSave={handleSaveLeadFromModal}
           onDelete={handleDeleteLeadFromModal}
         />
@@ -1214,7 +1322,11 @@ export function SpreadsheetApp() {
         <ManageTeamAccountsModal
           isOpen={isManageAccountsModalOpen}
           onClose={() => setIsManageAccountsModalOpen(false)}
-          onRefreshSheets={fetchSheets}
+          onRefreshSheets={() => {
+            fetchSheets();
+            fetchUsers();
+          }}
+          onUserUpdated={handleUserUpdated}
         />
       )}
 
