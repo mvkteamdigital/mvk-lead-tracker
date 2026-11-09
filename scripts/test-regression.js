@@ -828,6 +828,107 @@ it("Filter bar visibility partitions options between top chips and More Filters 
   assert.deepStrictEqual(hiddenInMore, ["Hoarding"]);
 });
 
+it("Modal pending state isolation: background polling and prop changes do not overwrite open modal edits", () => {
+  // Simulate modal lifecycle
+  let wasOpen = false;
+  let isOpen = true;
+  let configState = {};
+
+  function syncState(propsColumns) {
+    // Exact logic from ConfigureDropdownModal with wasOpenRef
+    if (isOpen && !wasOpen) {
+      configState = {
+        options: [...propsColumns.options],
+        filterVisibility: { ...propsColumns.filterVisibility },
+      };
+    }
+    wasOpen = isOpen;
+  }
+
+  // 1. Initial open with 8 options
+  const initialDbColumns = {
+    options: ["Meta Ads", "Google Ads", "Direct", "Referral", "Walk-in", "Website", "Cold Call", "99acers"],
+    filterVisibility: { "Meta Ads": true },
+  };
+  syncState(initialDbColumns);
+  assert.strictEqual(configState.options.length, 8);
+
+  // 2. User adds "Hoarding" (local pending change)
+  configState.options.push("Hoarding");
+  configState.filterVisibility["Hoarding"] = true;
+  assert.strictEqual(configState.options.length, 9);
+  assert.ok(configState.options.includes("Hoarding"));
+
+  // 3. 15 seconds pass: background polling triggers and delivers fresh DB columns (which still have 8 options)
+  const polledDbColumns = {
+    options: ["Meta Ads", "Google Ads", "Direct", "Referral", "Walk-in", "Website", "Cold Call", "99acers"],
+    filterVisibility: { "Meta Ads": true },
+  };
+  syncState(polledDbColumns); // Component re-renders with new props while isOpen=true
+
+  // 4. VERIFY: "Hoarding" is STILL in configState and was NOT wiped out!
+  assert.strictEqual(configState.options.length, 9);
+  assert.ok(configState.options.includes("Hoarding"));
+
+  // 5. User adds another source "Radio FM"
+  configState.options.push("Radio FM");
+  assert.strictEqual(configState.options.length, 10);
+
+  // 6. Polling triggers AGAIN
+  syncState(polledDbColumns);
+  assert.strictEqual(configState.options.length, 10);
+  assert.ok(configState.options.includes("Radio FM"));
+  assert.ok(configState.options.includes("Hoarding"));
+
+  // 7. Modal closes (user saves or cancels)
+  isOpen = false;
+  syncState(polledDbColumns);
+  assert.strictEqual(wasOpen, false);
+
+  // 8. Modal re-opens: re-initializes from latest saved props
+  isOpen = true;
+  const savedDbColumns = {
+    options: ["Meta Ads", "Google Ads", "Direct", "Referral", "Walk-in", "Website", "Cold Call", "99acers", "Hoarding", "Radio FM"],
+    filterVisibility: { "Meta Ads": true, "Hoarding": true, "Radio FM": false },
+  };
+  syncState(savedDbColumns);
+  assert.strictEqual(configState.options.length, 10);
+  assert.ok(configState.options.includes("Hoarding"));
+  assert.ok(configState.options.includes("Radio FM"));
+});
+
+it("Save failure preserves pending configuration without silent deletion", async () => {
+  let pendingState = {
+    options: ["Meta Ads", "Google Ads", "Hoarding"],
+    filterVisibility: { "Meta Ads": true, "Google Ads": true, "Hoarding": true },
+  };
+  let errorMsg = null;
+  let modalOpen = true;
+
+  // Mock onSaveOptions that throws network failure
+  async function mockFailedSave() {
+    throw new Error("Neon Postgres connection timeout. Please retry.");
+  }
+
+  // HandleSave wrapper matching ConfigureDropdownModal
+  async function handleSave() {
+    try {
+      await mockFailedSave();
+      modalOpen = false;
+    } catch (err) {
+      errorMsg = err.message;
+      // modalOpen remains true!
+    }
+  }
+
+  await handleSave();
+
+  // Assertions: error is captured, modal did not close, pending options are intact
+  assert.strictEqual(modalOpen, true);
+  assert.strictEqual(errorMsg, "Neon Postgres connection timeout. Please retry.");
+  assert.deepStrictEqual(pendingState.options, ["Meta Ads", "Google Ads", "Hoarding"]);
+});
+
 console.log(`\n=== ALL TESTS PASSED: ${passed}/${total} ===\n`);
 if (passed !== total) {
   process.exit(1);

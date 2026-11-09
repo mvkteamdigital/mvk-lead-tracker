@@ -529,8 +529,9 @@ export function SpreadsheetApp() {
   }, []);
 
   // Synchronized Multi-User Access: Polling every 15 seconds so CEO / Admins and members stay in sync
+  // Paused while configuration modals are open to prevent any background state overwrites
   useEffect(() => {
-    if (!activeSheetId) return;
+    if (!activeSheetId || isDropdownModalOpen) return;
 
     const interval = setInterval(() => {
       if (savingStatus !== "saving") {
@@ -539,7 +540,7 @@ export function SpreadsheetApp() {
     }, 15000);
 
     return () => clearInterval(interval);
-  }, [activeSheetId, savingStatus, handleRefreshFromDB]);
+  }, [activeSheetId, savingStatus, handleRefreshFromDB, isDropdownModalOpen]);
 
   // Get active cell value
   const getActiveCellValue = (): string => {
@@ -971,7 +972,8 @@ export function SpreadsheetApp() {
 
   // 8. Update Columns (widths, rename, reorder, delete, filter visibility)
   const handleUpdateColumns = async (columns: ColumnDef[]) => {
-    if (!activeSheet) return;
+    const currentSheet = activeSheetRef.current || activeSheet;
+    if (!currentSheet) return;
 
     setActiveSheet((prev) => (prev ? { ...prev, columns } : prev));
     if (user?.role === "ADMIN") {
@@ -979,12 +981,15 @@ export function SpreadsheetApp() {
     }
 
     try {
-      const res = await fetch(`/api/sheets/${activeSheet.id}`, {
+      const res = await fetch(`/api/sheets/${currentSheet.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ columns, syncAll: user?.role === "ADMIN" }),
       });
-      if (!res.ok) throw new Error("Failed to save columns");
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || "Failed to save columns");
+      }
       if (user?.role === "ADMIN") {
         await fetchSheets();
       }
@@ -992,13 +997,15 @@ export function SpreadsheetApp() {
     } catch (err: any) {
       console.error(err);
       showToast(err.message || "Failed to save column settings", "error");
+      throw err;
     }
   };
 
   // 9. Add New Column
   const handleAddColumn = async (newCol: ColumnDef) => {
-    if (!activeSheet) return;
-    const updatedCols = [...activeSheet.columns, newCol];
+    const currentSheet = activeSheetRef.current || activeSheet;
+    if (!currentSheet) return;
+    const updatedCols = [...currentSheet.columns, newCol];
     await handleUpdateColumns(updatedCols);
   };
 
@@ -1009,28 +1016,32 @@ export function SpreadsheetApp() {
     filterVisibility?: Record<string, boolean>,
     allColumnsToUpdate?: { columnId: string; options: string[]; filterVisibility: Record<string, boolean> }[]
   ) => {
-    if (!activeSheet) return;
+    const currentSheet = activeSheetRef.current || activeSheet;
+    if (!currentSheet) return;
 
-    let updatedCols = [...activeSheet.columns];
+    let updatedCols = [...currentSheet.columns];
 
     if (allColumnsToUpdate && allColumnsToUpdate.length > 0) {
       allColumnsToUpdate.forEach(({ columnId: colId, options: colOpts, filterVisibility: colVis }) => {
         const isFollowup = colId.includes("followup");
-        const exists = updatedCols.some((c) =>
-          isFollowup ? c.type === "dropdown" && c.id.includes("followup") : c.id === colId
-        );
+        const isSource = colId === "col_lead_source" || colId.toLowerCase().includes("source");
+
+        const matchesCol = (c: ColumnDef) => {
+          if (isFollowup) return c.type === "dropdown" && c.id.includes("followup");
+          if (isSource) return c.id === "col_lead_source" || c.name.toLowerCase().includes("source");
+          return c.id === colId;
+        };
+
+        const exists = updatedCols.some(matchesCol);
 
         if (exists) {
           updatedCols = updatedCols.map((c) => {
-            if (isFollowup && c.type === "dropdown" && c.id.includes("followup")) {
-              return { ...c, options: colOpts, filterVisibility: colVis };
-            }
-            if (c.id === colId) {
+            if (matchesCol(c)) {
               return { ...c, options: colOpts, filterVisibility: colVis };
             }
             return c;
           });
-        } else if (colId === "col_lead_source") {
+        } else if (isSource) {
           // If col_lead_source didn't exist in activeSheet.columns, insert it after col_number
           const numIdx = updatedCols.findIndex((c) => c.id === "col_number");
           const newCol: ColumnDef = {
@@ -1051,15 +1062,15 @@ export function SpreadsheetApp() {
       });
     } else {
       const isFollowupCol = columnId.includes("followup");
+      const isSourceCol = columnId === "col_lead_source" || columnId.toLowerCase().includes("source");
+      const matchesCol = (c: ColumnDef) => {
+        if (isFollowupCol) return c.type === "dropdown" && c.id.includes("followup");
+        if (isSourceCol) return c.id === "col_lead_source" || c.name.toLowerCase().includes("source");
+        return c.id === columnId;
+      };
+
       updatedCols = updatedCols.map((c) => {
-        if (isFollowupCol && c.type === "dropdown" && c.id.includes("followup")) {
-          return {
-            ...c,
-            options,
-            filterVisibility: filterVisibility !== undefined ? filterVisibility : c.filterVisibility,
-          };
-        }
-        if (c.id === columnId) {
+        if (matchesCol(c)) {
           return {
             ...c,
             options,

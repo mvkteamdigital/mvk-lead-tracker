@@ -52,6 +52,16 @@ export function ConfigureDropdownModal({
       addedIds.add("col_followup_2");
       addedIds.add("col_followup_3");
       addedIds.add("col_followup_4");
+    } else {
+      list.push({
+        id: "col_followup_1",
+        name: "Follow-Up Status",
+        type: "dropdown",
+        width: 170,
+        options: DEFAULT_FOLLOWUP_OPTIONS,
+        filterVisibility: DEFAULT_STATUS_FILTER_VISIBILITY,
+      });
+      addedIds.add("col_followup_1");
     }
 
     // 2. Lead Source
@@ -62,6 +72,17 @@ export function ConfigureDropdownModal({
     if (sourceCol) {
       list.push(sourceCol);
       addedIds.add(sourceCol.id);
+    } else {
+      list.push({
+        id: "col_lead_source",
+        name: "Lead Source",
+        type: "dropdown",
+        width: 160,
+        headerStyle: "gold",
+        options: DEFAULT_LEAD_SOURCES,
+        filterVisibility: DEFAULT_SOURCE_FILTER_VISIBILITY,
+      });
+      addedIds.add("col_lead_source");
     }
 
     // 3. Any remaining custom dropdown columns
@@ -89,45 +110,54 @@ export function ConfigureDropdownModal({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // Sync state whenever modal opens or column changes
+  // Ref to track open state transitions: ONLY initialize state when modal transitions from closed to open
+  // This guarantees that background polling, parent re-renders, or column reference changes NEVER overwrite pending changes!
+  const wasOpenRef = React.useRef(false);
+
   useEffect(() => {
-    if (!isOpen) return;
+    if (isOpen && !wasOpenRef.current) {
+      const initialMap: Record<string, ColumnConfigState> = {};
 
-    const initialMap: Record<string, ColumnConfigState> = {};
+      dropdownCols.forEach((c) => {
+        const isSource = c.id === "col_lead_source" || c.name.toLowerCase().includes("source");
+        const isStatus = c.id.includes("followup") || c.name.toLowerCase().includes("status");
 
-    dropdownCols.forEach((c) => {
-      const isSource = c.id === "col_lead_source" || c.name.toLowerCase().includes("source");
-      const isStatus = c.id.includes("followup") || c.name.toLowerCase().includes("status");
+        const defaultOptions = isSource ? DEFAULT_LEAD_SOURCES : isStatus ? DEFAULT_FOLLOWUP_OPTIONS : [];
+        const defaultVisibility = isSource ? DEFAULT_SOURCE_FILTER_VISIBILITY : isStatus ? DEFAULT_STATUS_FILTER_VISIBILITY : {};
 
-      const defaultOptions = isSource ? DEFAULT_LEAD_SOURCES : isStatus ? DEFAULT_FOLLOWUP_OPTIONS : [];
-      const defaultVisibility = isSource ? DEFAULT_SOURCE_FILTER_VISIBILITY : isStatus ? DEFAULT_STATUS_FILTER_VISIBILITY : {};
+        const currentOptions = Array.isArray(c.options) && c.options.length > 0 ? c.options : defaultOptions;
+        const currentVis = c.filterVisibility || { ...defaultVisibility };
 
-      const currentOptions = Array.isArray(c.options) && c.options.length > 0 ? c.options : defaultOptions;
-      const currentVis = c.filterVisibility || { ...defaultVisibility };
+        // Ensure every option has a boolean visibility setting
+        currentOptions.forEach((opt) => {
+          if (currentVis[opt] === undefined) {
+            currentVis[opt] = defaultVisibility[opt] !== undefined ? defaultVisibility[opt] : false;
+          }
+        });
 
-      // Ensure every option has a boolean visibility setting
-      currentOptions.forEach((opt) => {
-        if (currentVis[opt] === undefined) {
-          currentVis[opt] = defaultVisibility[opt] !== undefined ? defaultVisibility[opt] : false;
-        }
+        initialMap[c.id] = {
+          options: [...currentOptions],
+          filterVisibility: { ...currentVis },
+        };
       });
 
-      initialMap[c.id] = {
-        options: [...currentOptions],
-        filterVisibility: { ...currentVis },
-      };
-    });
+      setConfigState(initialMap);
+      setErrorMsg(null);
+      setNewOption("");
 
-    setConfigState(initialMap);
-
-    // Pick target column: column passed in, or default to first
-    if (column) {
-      const match = dropdownCols.find((c) => c.id === column.id || (column.id.includes("followup") && c.id.includes("followup")));
-      if (match) setActiveColId(match.id);
-      else if (dropdownCols.length > 0) setActiveColId(dropdownCols[0].id);
-    } else if (dropdownCols.length > 0) {
-      setActiveColId(dropdownCols[0].id);
+      // Pick target column: column passed in, or default to first
+      if (column) {
+        const match = dropdownCols.find(
+          (c) => c.id === column.id || (column.id.includes("followup") && c.id.includes("followup"))
+        );
+        if (match) setActiveColId(match.id);
+        else if (dropdownCols.length > 0) setActiveColId(dropdownCols[0].id);
+      } else if (dropdownCols.length > 0) {
+        setActiveColId(dropdownCols[0].id);
+      }
     }
+
+    wasOpenRef.current = isOpen;
   }, [isOpen, column, dropdownCols]);
 
   if (!isOpen) return null;
@@ -214,6 +244,7 @@ export function ConfigureDropdownModal({
 
   const handleSave = async () => {
     setSaving(true);
+    setErrorMsg(null);
     try {
       const allToUpdate = Object.entries(configState).map(([colId, state]) => ({
         columnId: colId,
@@ -228,6 +259,9 @@ export function ConfigureDropdownModal({
         allToUpdate
       );
       onClose();
+    } catch (err: any) {
+      console.error("Save dropdown options error:", err);
+      setErrorMsg(err.message || "Failed to save configuration. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -299,6 +333,23 @@ export function ConfigureDropdownModal({
                 </button>
               );
             })}
+          </div>
+        )}
+
+        {/* Error Notification Banner */}
+        {errorMsg && (
+          <div className="mx-6 mt-3 px-3.5 py-2.5 bg-rose-50 border border-rose-200 rounded-xl text-xs font-semibold text-rose-700 flex items-center justify-between shrink-0 shadow-2xs">
+            <span className="flex items-center gap-1.5">
+              <span>⚠️</span>
+              <span>{errorMsg}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setErrorMsg(null)}
+              className="text-rose-400 hover:text-rose-700 p-0.5 rounded transition-colors"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
           </div>
         )}
 

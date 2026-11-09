@@ -234,7 +234,7 @@ export async function PUT(req: Request, { params }: Params) {
       if (body.syncAll && user.role === "ADMIN") {
         await prisma.sheet.updateMany({
           data: { columns: colsStr },
-        }).catch(console.error);
+        });
       }
     }
     if (body.order !== undefined && user.role === "ADMIN") {
