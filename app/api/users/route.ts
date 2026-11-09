@@ -44,6 +44,7 @@ export async function GET(req: Request) {
             id: true,
             name: true,
             order: true,
+            color: true,
             rows: {
               select: { data: true },
             },
@@ -74,6 +75,7 @@ export async function GET(req: Request) {
       return {
         id: s.id,
         name: s.name,
+        color: s.color,
         userId: s.userId,
         userName: s.user?.name || null,
         validRowCount: validLeads,
@@ -88,6 +90,7 @@ export async function GET(req: Request) {
           id: s.id,
           name: s.name,
           order: s.order,
+          color: s.color,
           validRowCount: validLeads,
           _count: { rows: validLeads },
         };
@@ -289,6 +292,11 @@ export async function PUT(req: Request) {
       assignSheetId,
       unassignSheetId,
       newSheetName,
+      renameSheetId,
+      renameSheetName,
+      deleteSheetId,
+      reassignSheetId,
+      reassignTargetUserId,
     } = await req.json();
 
     if (!userId) {
@@ -380,6 +388,29 @@ export async function PUT(req: Request) {
       });
     }
 
+    // Rename sheet
+    if (renameSheetId && renameSheetName && renameSheetName.trim()) {
+      await prisma.sheet.update({
+        where: { id: renameSheetId },
+        data: { name: renameSheetName.trim() },
+      });
+    }
+
+    // Reassign sheet to another member
+    if (reassignSheetId && reassignTargetUserId !== undefined) {
+      await prisma.sheet.update({
+        where: { id: reassignSheetId },
+        data: { userId: reassignTargetUserId || null },
+      });
+    }
+
+    // Delete sheet
+    if (deleteSheetId) {
+      await prisma.sheet.delete({
+        where: { id: deleteSheetId },
+      });
+    }
+
     if (sheetId !== undefined) {
       if (!sheetId || sheetId === "none") {
         await prisma.sheet.updateMany({
@@ -411,6 +442,7 @@ export async function PUT(req: Request) {
             id: true,
             name: true,
             order: true,
+            color: true,
             rows: {
               select: { data: true },
             },
@@ -426,6 +458,7 @@ export async function PUT(req: Request) {
         id: s.id,
         name: s.name,
         order: s.order,
+        color: s.color,
         validRowCount: validLeads,
         _count: { rows: validLeads },
       };

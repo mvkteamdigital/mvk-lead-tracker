@@ -25,6 +25,7 @@ model User {
 model Sheet {
   id          String    @id @default(cuid())
   name        String
+  color       String?   // Tab color accent (e.g. #ef4444, #3b82f6, #10b981)
   userId      String?   // Linked team member user id if owned by member
   user        User?     @relation(fields: [userId], references: [id], onDelete: SetNull)
   order       Int       @default(0)

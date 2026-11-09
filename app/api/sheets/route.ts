@@ -47,6 +47,7 @@ export async function GET() {
       return {
         id: s.id,
         name: s.name,
+        color: s.color,
         userId: s.userId,
         order: s.order,
         columns: JSON.parse(s.columns || "[]"),
@@ -80,7 +81,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { name, userId, columns } = await req.json();
+    const { name, userId, columns, color } = await req.json();
 
     if (!name || !name.trim()) {
       return NextResponse.json(
@@ -97,6 +98,7 @@ export async function POST(req: Request) {
         name: name.trim(),
         userId: userId || null,
         order: count,
+        color: color || null,
         columns: JSON.stringify(sheetColumns),
       },
       include: {
@@ -115,6 +117,7 @@ export async function POST(req: Request) {
         name: newSheet.name,
         userId: newSheet.userId,
         order: newSheet.order,
+        color: newSheet.color,
         columns: JSON.parse(newSheet.columns),
         rowCount: 0,
         user: newSheet.user,

@@ -992,9 +992,14 @@ export function SpreadsheetApp() {
           setActiveSheet((prev) => (prev ? { ...prev, name: newName } : prev));
         }
         await fetchSheets();
+        showToast(`Sheet renamed to "${newName}"`, "success");
+      } else {
+        const err = await res.json();
+        showToast(err.error || "Failed to rename sheet", "error");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      showToast(err.message || "Failed to rename sheet", "error");
     }
   };
 
@@ -1003,14 +1008,111 @@ export function SpreadsheetApp() {
     try {
       const res = await fetch(`/api/sheets/${id}`, { method: "DELETE" });
       if (res.ok) {
-        fetchSheets();
+        showToast("Sheet deleted successfully", "info");
+        await fetchSheets();
+        if (activeSheetId === id) {
+          const remaining = sheets.filter((s) => s.id !== id);
+          if (remaining.length > 0) {
+            setActiveSheetId(remaining[0].id);
+          }
+        }
+      } else {
+        const err = await res.json();
+        showToast(err.error || "Failed to delete sheet", "error");
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      showToast(err.message || "Failed to delete sheet", "error");
     }
   };
 
-  // 13. Create New Sheet Tab (Admin)
+  // 13. Duplicate Sheet (Structure Only vs Clone Leads)
+  const handleDuplicateSheet = async (id: string, newName: string, includeLeads: boolean) => {
+    try {
+      const res = await fetch(`/api/sheets/${id}/duplicate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newName, includeLeads }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to duplicate sheet");
+      await fetchSheets();
+      if (data.sheet?.id) {
+        setActiveSheetId(data.sheet.id);
+      }
+      showToast(`Sheet "${data.sheet?.name || newName}" created successfully!`, "success");
+    } catch (err: any) {
+      showToast(err.message || "Failed to duplicate sheet", "error");
+    }
+  };
+
+  // 14. Change Sheet Tab Color
+  const handleChangeSheetColor = async (id: string, color: string | null) => {
+    // Optimistic local update
+    setSheets((prev) => prev.map((s) => (s.id === id ? { ...s, color } : s)));
+    if (activeSheet && activeSheet.id === id) {
+      setActiveSheet((prev) => (prev ? { ...prev, color } : prev));
+    }
+    try {
+      const res = await fetch(`/api/sheets/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ color }),
+      });
+      if (!res.ok) throw new Error("Failed to update sheet color");
+      await fetchSheets();
+    } catch (err: any) {
+      showToast("Failed to save tab color", "error");
+      await fetchSheets();
+    }
+  };
+
+  // 15. Copy Sheet to Member
+  const handleCopySheetToUser = async (
+    id: string,
+    targetUserId: string,
+    newName: string,
+    includeLeads: boolean
+  ) => {
+    try {
+      const res = await fetch(`/api/sheets/${id}/duplicate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetUserId, newName, includeLeads }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to copy sheet to member");
+      await fetchSheets();
+      if (user?.role === "ADMIN") {
+        fetchUsers();
+      }
+      showToast("Sheet copied to member successfully!", "success");
+    } catch (err: any) {
+      showToast(err.message || "Failed to copy sheet", "error");
+    }
+  };
+
+  // 16. Move / Reassign Sheet to Member
+  const handleMoveSheetToUser = async (id: string, targetUserId: string) => {
+    try {
+      const res = await fetch(`/api/sheets/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: targetUserId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to reassign sheet");
+      await fetchSheets();
+      if (user?.role === "ADMIN") {
+        fetchUsers();
+      }
+      showToast("Sheet reassigned successfully!", "success");
+    } catch (err: any) {
+      showToast(err.message || "Failed to reassign sheet", "error");
+    }
+  };
+
+  // 17. Create New Sheet Tab (Admin)
   const handleCreateSheet = async (name: string, assignedUserId?: string) => {
     const res = await fetch("/api/sheets", {
       method: "POST",
@@ -1382,7 +1484,7 @@ export function SpreadsheetApp() {
         )}
       </div>
 
-      {/* 4. Large, Thicker, High-Contrast Bottom Tab Bar (Draggable & Reorderable) */}
+      {/* 4. Large, Thicker, High-Contrast Bottom Tab Bar (Draggable & Google Sheets Menu) */}
       <BottomTabBar
         sheets={displayedSheets}
         activeSheetId={activeSheetId}
@@ -1393,10 +1495,16 @@ export function SpreadsheetApp() {
           setActiveSheetId(id);
         }}
         isAdmin={user?.role === "ADMIN"}
+        users={usersList}
         onOpenNewSheetModal={() => setIsNewSheetModalOpen(true)}
         onRenameSheet={handleRenameSheet}
         onDeleteSheet={handleDeleteSheet}
         onReorderSheets={handleReorderSheets}
+        onDuplicateSheet={handleDuplicateSheet}
+        onChangeSheetColor={handleChangeSheetColor}
+        onCopySheetToUser={handleCopySheetToUser}
+        onMoveSheetToUser={handleMoveSheetToUser}
+        onOpenManageAccounts={() => setIsManageAccountsModalOpen(true)}
       />
 
       {/* Modals */}

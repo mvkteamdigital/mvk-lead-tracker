@@ -175,6 +175,7 @@ export async function GET(req: Request, { params }: Params) {
         name: displayName,
         userId: sheet.userId,
         order: sheet.order,
+        color: sheet.color,
         columns: parsedCols,
         rows: formattedRows,
         user: sheet.user,
@@ -222,6 +223,9 @@ export async function PUT(req: Request, { params }: Params) {
       const trimmedName = body.name.trim();
       updateData.name = trimmedName;
     }
+    if (body.color !== undefined) {
+      updateData.color = body.color || null;
+    }
     if (body.columns !== undefined) {
       const colsStr = typeof body.columns === "string" ? body.columns : JSON.stringify(body.columns);
       updateData.columns = colsStr;
@@ -237,7 +241,7 @@ export async function PUT(req: Request, { params }: Params) {
       updateData.order = body.order;
     }
     if (body.userId !== undefined && user.role === "ADMIN") {
-      updateData.userId = body.userId;
+      updateData.userId = body.userId || null;
     }
 
     const updated = await prisma.sheet.update({
@@ -256,6 +260,7 @@ export async function PUT(req: Request, { params }: Params) {
         name: updated.name,
         userId: updated.userId,
         order: updated.order,
+        color: updated.color,
         columns: JSON.parse(updated.columns || "[]"),
         user: updated.user,
       },

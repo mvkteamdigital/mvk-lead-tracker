@@ -30,6 +30,7 @@ export interface RowData {
 export interface SheetMeta {
   id: string;
   name: string;
+  color?: string | null;
   userId: string | null;
   order: number;
   columns: ColumnDef[];

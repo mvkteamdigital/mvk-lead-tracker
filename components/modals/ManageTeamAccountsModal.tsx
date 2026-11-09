@@ -24,12 +24,15 @@ import {
   Copy,
   User,
   Layers,
+  ArrowRightLeft,
+  AlertTriangle,
 } from "lucide-react";
 
 interface SheetItem {
   id: string;
   name: string;
   order?: number;
+  color?: string | null;
   validRowCount?: number;
   _count?: { rows: number };
 }
@@ -56,6 +59,7 @@ interface AdminStats {
 interface SheetOption {
   id: string;
   name: string;
+  color?: string | null;
   userId: string | null;
   validRowCount?: number;
 }
@@ -119,6 +123,15 @@ export function ManageTeamAccountsModal({
   const [editRole, setEditRole] = useState<"MEMBER" | "ADMIN">("MEMBER");
   const [editSheetId, setEditSheetId] = useState<string>("none");
 
+  // 5. Dedicated Sheet Management States (Rename, Reassign, Delete)
+  const [renamingSheet, setRenamingSheet] = useState<{ id: string; name: string } | null>(null);
+  const [renameInputVal, setRenameInputVal] = useState("");
+
+  const [reassigningSheet, setReassigningSheet] = useState<{ id: string; name: string; currentUserId?: string } | null>(null);
+  const [reassignTargetId, setReassignTargetId] = useState("");
+
+  const [deletingSheet, setDeletingSheet] = useState<{ id: string; name: string; leadCount: number } | null>(null);
+
   // Fetch all users and sheets
   const fetchData = async () => {
     try {
@@ -146,9 +159,90 @@ export function ManageTeamAccountsModal({
     }
   };
 
+  // Re-fetch data every time modal is opened to prevent stale data
   useEffect(() => {
-    fetchData();
-  }, []);
+    if (isOpen) {
+      fetchData();
+    }
+  }, [isOpen]);
+
+  // --- SHEET MANAGEMENT ACTION HANDLERS ---
+  const handleSaveRenameSheet = async () => {
+    if (!renamingSheet || !renameInputVal.trim()) return;
+    setSavingAction(true);
+    setNotification(null);
+    try {
+      const res = await fetch(`/api/sheets/${renamingSheet.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: renameInputVal.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to rename sheet.");
+      setNotification({
+        type: "success",
+        msg: `Sheet renamed to "${renameInputVal.trim()}" successfully.`,
+      });
+      setRenamingSheet(null);
+      await fetchData();
+      if (onRefreshSheets) onRefreshSheets();
+    } catch (err: any) {
+      setNotification({ type: "error", msg: err.message || "Failed to rename sheet." });
+    } finally {
+      setSavingAction(false);
+    }
+  };
+
+  const handleConfirmReassignSheet = async () => {
+    if (!reassigningSheet || !reassignTargetId) return;
+    setSavingAction(true);
+    setNotification(null);
+    try {
+      const res = await fetch(`/api/sheets/${reassigningSheet.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId: reassignTargetId }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to reassign sheet.");
+      const targetUser = users.find((u) => u.id === reassignTargetId);
+      setNotification({
+        type: "success",
+        msg: `Sheet "${reassigningSheet.name}" reassigned to ${targetUser?.name || "new member"} successfully.`,
+      });
+      setReassigningSheet(null);
+      await fetchData();
+      if (onRefreshSheets) onRefreshSheets();
+    } catch (err: any) {
+      setNotification({ type: "error", msg: err.message || "Failed to reassign sheet." });
+    } finally {
+      setSavingAction(false);
+    }
+  };
+
+  const handleConfirmDeleteSheet = async () => {
+    if (!deletingSheet) return;
+    setSavingAction(true);
+    setNotification(null);
+    try {
+      const res = await fetch(`/api/sheets/${deletingSheet.id}`, {
+        method: "DELETE",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to delete sheet.");
+      setNotification({
+        type: "success",
+        msg: `Sheet "${deletingSheet.name}" and its leads were permanently deleted.`,
+      });
+      setDeletingSheet(null);
+      await fetchData();
+      if (onRefreshSheets) onRefreshSheets();
+    } catch (err: any) {
+      setNotification({ type: "error", msg: err.message || "Failed to delete sheet." });
+    } finally {
+      setSavingAction(false);
+    }
+  };
 
   // --- ASSIGN / CREATE SHEET TAB FOR EXISTING MEMBER HANDLER ---
   const handleCreateTabForMember = async (e: React.FormEvent) => {
@@ -1004,8 +1098,8 @@ export function ManageTeamAccountsModal({
                             )}
                           </td>
 
-                          {/* 5. Sheet Tab(s) & Individual Lead Counts */}
-                          <td className="py-3 px-4 text-slate-700">
+                          {/* 5. Sheet Tab(s) & Individual Lead Counts & Sheet Actions */}
+                          <td className="py-3 px-4 text-slate-700 min-w-[260px]">
                             {(!u.sheets || u.sheets.length === 0) ? (
                               <div className="flex items-center gap-1.5">
                                 <span className="text-slate-400 italic text-[11px]">Unassigned</span>
@@ -1018,60 +1112,122 @@ export function ManageTeamAccountsModal({
                                   + Tab
                                 </button>
                               </div>
-                            ) : u.sheets.length === 1 ? (
-                              (() => {
-                                const s = u.sheets[0];
-                                const leadCount = s.validRowCount !== undefined ? s.validRowCount : (s._count?.rows ?? 0);
-                                return (
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 font-semibold text-[11px] text-slate-800 shadow-2xs">
-                                      <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
-                                      <span className="font-bold">{s.name}</span>
-                                      <span className="text-[10px] px-1.5 py-0.2 rounded-full font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                                        {leadCount} {leadCount === 1 ? "lead" : "leads"}
-                                      </span>
-                                    </span>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleQuickAddTab(u)}
-                                      className="text-[10px] font-bold text-purple-700 hover:text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-1.5 py-0.5 rounded transition-colors"
-                                      title={`Add an additional sheet tab for ${u.name}`}
-                                    >
-                                      + Tab
-                                    </button>
-                                  </div>
-                                );
-                              })()
                             ) : (
                               (() => {
-                                const total = u.totalLeadCount ?? u.sheets.reduce((sum, s) => sum + (s.validRowCount ?? s._count?.rows ?? 0), 0);
+                                const total =
+                                  u.totalLeadCount ??
+                                  u.sheets.reduce(
+                                    (sum, s) => sum + (s.validRowCount ?? s._count?.rows ?? 0),
+                                    0
+                                  );
+
                                 return (
                                   <div className="space-y-1.5 py-0.5">
-                                    <div className="flex items-center gap-1.5">
+                                    {/* Combined Member Summary Header */}
+                                    <div className="flex items-center justify-between gap-1.5">
                                       <span className="inline-flex items-center gap-1 text-[11px] font-extrabold text-amber-950 bg-amber-100/90 border border-amber-300 px-2 py-0.5 rounded-md shadow-2xs">
                                         <Layers className="h-3 w-3 text-amber-700 shrink-0" />
-                                        <span>{total} Total Leads</span>
-                                        <span className="text-[10px] font-semibold text-amber-800">({u.sheets.length} tabs)</span>
+                                        <span>
+                                          {total} {total === 1 ? "Lead" : "Combined Leads"}
+                                        </span>
+                                        <span className="text-[10px] font-semibold text-amber-800">
+                                          ({u.sheets.length} {u.sheets.length === 1 ? "sheet" : "sheets"})
+                                        </span>
                                       </span>
                                       <button
                                         type="button"
                                         onClick={() => handleQuickAddTab(u)}
-                                        className="text-[10px] font-bold text-purple-700 hover:text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-1.5 py-0.5 rounded transition-colors"
-                                        title={`Add another sheet tab for ${u.name}`}
+                                        className="text-[10px] font-bold text-purple-700 hover:text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-1.5 py-0.5 rounded transition-colors flex items-center gap-0.5"
+                                        title={`Add an additional sheet tab for ${u.name}`}
                                       >
-                                        + Tab
+                                        <Plus className="h-2.5 w-2.5 stroke-[3]" />
+                                        <span>Tab</span>
                                       </button>
                                     </div>
-                                    <div className="pl-1 space-y-0.5">
+
+                                    {/* Individual Sheets List with Actions */}
+                                    <div className="space-y-1">
                                       {u.sheets.map((s) => {
-                                        const sLeads = s.validRowCount !== undefined ? s.validRowCount : (s._count?.rows ?? 0);
+                                        const sLeads =
+                                          s.validRowCount !== undefined
+                                            ? s.validRowCount
+                                            : s._count?.rows ?? 0;
                                         return (
-                                          <div key={s.id} className="text-[11px] text-slate-700 flex items-center gap-1.5">
-                                            <span className="text-slate-400 font-bold">•</span>
-                                            <span className="font-semibold text-slate-800">{s.name}:</span>
-                                            <span className="text-slate-600 font-mono text-[10px] bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200">
-                                              {sLeads} {sLeads === 1 ? "lead" : "leads"}
-                                            </span>
+                                          <div
+                                            key={s.id}
+                                            className="group/sheet flex items-center justify-between bg-slate-50 hover:bg-slate-100/80 px-2 py-1 rounded-lg border border-slate-200/80 text-[11px] transition-colors"
+                                          >
+                                            <div className="flex items-center gap-1.5 min-w-0 mr-1.5">
+                                              {/* Tab Color Indicator */}
+                                              {s.color ? (
+                                                <span
+                                                  className="h-2 w-2 rounded-full shrink-0 shadow-2xs"
+                                                  style={{ backgroundColor: s.color }}
+                                                />
+                                              ) : (
+                                                <FileSpreadsheet className="h-3 w-3 text-slate-400 shrink-0" />
+                                              )}
+                                              <span
+                                                className="font-bold text-slate-900 truncate"
+                                                title={s.name}
+                                              >
+                                                {s.name}
+                                              </span>
+                                              <span className="text-slate-600 font-mono text-[10px] bg-white px-1.5 py-0.2 rounded border border-slate-200 font-semibold shrink-0">
+                                                {sLeads} {sLeads === 1 ? "lead" : "leads"}
+                                              </span>
+                                            </div>
+
+                                            {/* Sheet Quick Actions: Rename, Reassign, Delete */}
+                                            <div className="flex items-center gap-0.5 shrink-0 opacity-80 group-hover/sheet:opacity-100 transition-opacity">
+                                              {/* Rename Sheet */}
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  setRenamingSheet({ id: s.id, name: s.name });
+                                                  setRenameInputVal(s.name);
+                                                }}
+                                                className="p-1 hover:bg-white text-slate-500 hover:text-blue-600 rounded transition-colors"
+                                                title={`Rename sheet "${s.name}"`}
+                                              >
+                                                <Edit2 className="h-3 w-3" />
+                                              </button>
+
+                                              {/* Reassign Sheet */}
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  setReassigningSheet({
+                                                    id: s.id,
+                                                    name: s.name,
+                                                    currentUserId: u.id,
+                                                  });
+                                                  setReassignTargetId(
+                                                    users.find((other) => other.id !== u.id)?.id || ""
+                                                  );
+                                                }}
+                                                className="p-1 hover:bg-white text-slate-500 hover:text-amber-600 rounded transition-colors"
+                                                title={`Reassign sheet "${s.name}" to another member`}
+                                              >
+                                                <ArrowRightLeft className="h-3 w-3" />
+                                              </button>
+
+                                              {/* Delete Sheet */}
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  setDeletingSheet({
+                                                    id: s.id,
+                                                    name: s.name,
+                                                    leadCount: sLeads,
+                                                  });
+                                                }}
+                                                className="p-1 hover:bg-white text-slate-500 hover:text-rose-600 rounded transition-colors"
+                                                title={`Delete sheet "${s.name}"`}
+                                              >
+                                                <Trash2 className="h-3 w-3" />
+                                              </button>
+                                            </div>
                                           </div>
                                         );
                                       })}
@@ -1324,7 +1480,176 @@ export function ManageTeamAccountsModal({
         </div>
       )}
 
-      {/* --- MODAL 2: EDIT USER DETAILS MODAL --- */}
+      {/* --- MODAL 3: RENAME SHEET MODAL --- */}
+      {renamingSheet && (
+        <div className="fixed inset-0 z-70 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-100">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-sm w-full p-5 animate-in zoom-in-95 duration-100">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3">
+              <div className="flex items-center gap-2">
+                <Edit2 className="h-4 w-4 text-blue-600" />
+                <h4 className="font-extrabold text-sm text-slate-900">Rename Sheet Tab</h4>
+              </div>
+              <button
+                onClick={() => setRenamingSheet(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSaveRenameSheet();
+              }}
+              className="space-y-3"
+            >
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Sheet Tab Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoFocus
+                  value={renameInputVal}
+                  onChange={(e) => setRenameInputVal(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium text-slate-900"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="submit"
+                  disabled={savingAction || !renameInputVal.trim()}
+                  className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 active:scale-95 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5"
+                >
+                  <Check className="h-4 w-4" />
+                  <span>{savingAction ? "Saving..." : "Save Name"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRenamingSheet(null)}
+                  className="py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL 4: REASSIGN SHEET MODAL --- */}
+      {reassigningSheet && (
+        <div className="fixed inset-0 z-70 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-100">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-sm w-full p-5 animate-in zoom-in-95 duration-100">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3">
+              <div className="flex items-center gap-2">
+                <ArrowRightLeft className="h-4 w-4 text-amber-600" />
+                <h4 className="font-extrabold text-sm text-slate-900">Reassign Sheet Tab</h4>
+              </div>
+              <button
+                onClick={() => setReassigningSheet(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleConfirmReassignSheet();
+              }}
+              className="space-y-3"
+            >
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Transfer ownership of sheet <strong className="text-slate-900">&quot;{reassigningSheet.name}&quot;</strong> to another team member:
+              </p>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Destination Team Member *
+                </label>
+                <select
+                  required
+                  value={reassignTargetId}
+                  onChange={(e) => setReassignTargetId(e.target.value)}
+                  className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 font-semibold text-slate-900"
+                >
+                  <option value="">-- Choose Member --</option>
+                  {users.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.name} ({u.email}) - {u.sheets.length} current sheets
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 pt-2">
+                <button
+                  type="submit"
+                  disabled={savingAction || !reassignTargetId}
+                  className="flex-1 py-2 bg-amber-600 hover:bg-amber-700 active:scale-95 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5"
+                >
+                  <Check className="h-4 w-4" />
+                  <span>{savingAction ? "Reassigning..." : "Confirm Reassign"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setReassigningSheet(null)}
+                  className="py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- MODAL 5: DELETE SHEET CONFIRMATION MODAL --- */}
+      {deletingSheet && (
+        <div className="fixed inset-0 z-70 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-100">
+          <div className="bg-white rounded-2xl shadow-2xl border border-rose-200 max-w-sm w-full p-5 animate-in zoom-in-95 duration-100">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="h-10 w-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0 border border-rose-200">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div>
+                <h4 className="font-extrabold text-sm text-slate-900">Delete Sheet Tab?</h4>
+                <p className="text-xs text-rose-600 font-semibold">Irreversible Action</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+              Are you sure you want to permanently delete sheet{" "}
+              <strong className="text-slate-900">&quot;{deletingSheet.name}&quot;</strong>?
+              All <strong>{deletingSheet.leadCount} lead records</strong> in this tab will be permanently removed from the database.
+            </p>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={savingAction}
+                onClick={handleConfirmDeleteSheet}
+                className="flex-1 py-2 bg-rose-600 hover:bg-rose-700 active:scale-95 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5"
+              >
+                <Trash2 className="h-4 w-4" />
+                <span>{savingAction ? "Deleting..." : "Permanently Delete"}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeletingSheet(null)}
+                className="py-2 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {editingUser && (
         <div className="fixed inset-0 z-60 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 animate-in fade-in duration-100">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-5 flex flex-col gap-4 animate-in zoom-in-95 duration-100">
@@ -1426,21 +1751,83 @@ export function ManageTeamAccountsModal({
                           key={s.id}
                           className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs shadow-2xs"
                         >
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-slate-900">{s.name}</span>
-                            <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-mono border border-slate-200">
+                          <div className="flex items-center gap-2 min-w-0 mr-2">
+                            {s.color ? (
+                              <span
+                                className="h-2.5 w-2.5 rounded-full shrink-0 shadow-2xs"
+                                style={{ backgroundColor: s.color }}
+                              />
+                            ) : (
+                              <FileSpreadsheet className="h-3.5 w-3.5 text-purple-600 shrink-0" />
+                            )}
+                            <span className="font-bold text-slate-900 truncate" title={s.name}>
+                              {s.name}
+                            </span>
+                            <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-mono border border-slate-200 shrink-0">
                               {count} {count === 1 ? "lead" : "leads"}
                             </span>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => handleUnassignSheetFromEditUser(s.id)}
-                            disabled={savingAction}
-                            className="text-[10px] text-rose-600 hover:text-rose-800 hover:bg-rose-50 px-2 py-0.5 rounded font-semibold transition-colors"
-                            title="Unlink this sheet from this member"
-                          >
-                            Unassign
-                          </button>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            {/* Rename */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRenamingSheet({ id: s.id, name: s.name });
+                                setRenameInputVal(s.name);
+                              }}
+                              className="p-1 text-slate-500 hover:text-blue-600 hover:bg-slate-100 rounded transition-colors"
+                              title="Rename this sheet"
+                            >
+                              <Edit2 className="h-3 w-3" />
+                            </button>
+
+                            {/* Reassign */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setReassigningSheet({
+                                  id: s.id,
+                                  name: s.name,
+                                  currentUserId: editingUser.id,
+                                });
+                                setReassignTargetId(
+                                  users.find((u) => u.id !== editingUser.id)?.id || ""
+                                );
+                              }}
+                              className="p-1 text-slate-500 hover:text-amber-600 hover:bg-slate-100 rounded transition-colors"
+                              title="Reassign to another member"
+                            >
+                              <ArrowRightLeft className="h-3 w-3" />
+                            </button>
+
+                            {/* Unassign */}
+                            <button
+                              type="button"
+                              onClick={() => handleUnassignSheetFromEditUser(s.id)}
+                              disabled={savingAction}
+                              className="text-[10px] text-slate-500 hover:text-amber-700 hover:bg-amber-50 px-1.5 py-0.5 rounded font-semibold transition-colors"
+                              title="Unlink this sheet from this member"
+                            >
+                              Unlink
+                            </button>
+
+                            {/* Delete */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setDeletingSheet({
+                                  id: s.id,
+                                  name: s.name,
+                                  leadCount: count,
+                                });
+                              }}
+                              className="p-1 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
+                              title="Permanently delete sheet"
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </button>
+                          </div>
                         </div>
                       );
                     })}
