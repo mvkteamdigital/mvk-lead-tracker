@@ -157,6 +157,22 @@ export async function POST(req: Request) {
       sheetId = userSheet.id;
     }
 
+    // Verify sheet exists and check authorization
+    const targetSheet = await prisma.sheet.findUnique({
+      where: { id: sheetId },
+      select: { id: true, userId: true, name: true },
+    });
+    if (!targetSheet) {
+      return NextResponse.json({ error: "Sheet not found" }, { status: 404 });
+    }
+
+    if (user.role !== "ADMIN" && targetSheet.userId !== user.id) {
+      return NextResponse.json(
+        { error: "Forbidden: You do not have permission to add leads to this sheet." },
+        { status: 403 }
+      );
+    }
+
     const dataObj =
       typeof body.data === "string"
         ? JSON.parse(body.data || "{}")

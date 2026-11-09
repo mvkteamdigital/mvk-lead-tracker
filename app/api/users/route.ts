@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { DEFAULT_COLUMNS } from "@/lib/defaults";
+import { isValidLead } from "@/lib/leads";
 import bcrypt from "bcryptjs";
 
 // GET /api/users - Admin only: List all users & sheets with credential management
@@ -42,17 +43,85 @@ export async function GET(req: Request) {
           select: {
             id: true,
             name: true,
-            _count: {
-              select: { rows: true },
+            order: true,
+            rows: {
+              select: { data: true },
             },
           },
+          orderBy: { order: "asc" },
         },
       },
       orderBy: { createdAt: "asc" },
     });
 
-    return NextResponse.json({ users });
+    const allSheets = await prisma.sheet.findMany({
+      orderBy: { order: "asc" },
+      include: {
+        user: { select: { id: true, name: true, email: true } },
+        rows: { select: { data: true } },
+      },
+    });
+
+    let totalOrganizationLeads = 0;
+    let unassignedLeadsCount = 0;
+
+    const sheetSummaries = allSheets.map((s) => {
+      const validLeads = s.rows.filter((r) => isValidLead(r.data)).length;
+      totalOrganizationLeads += validLeads;
+      if (!s.userId) {
+        unassignedLeadsCount += validLeads;
+      }
+      return {
+        id: s.id,
+        name: s.name,
+        userId: s.userId,
+        userName: s.user?.name || null,
+        validRowCount: validLeads,
+        order: s.order,
+      };
+    });
+
+    const formattedUsers = users.map((u) => {
+      const formattedSheets = u.sheets.map((s) => {
+        const validLeads = s.rows.filter((r) => isValidLead(r.data)).length;
+        return {
+          id: s.id,
+          name: s.name,
+          order: s.order,
+          validRowCount: validLeads,
+          _count: { rows: validLeads },
+        };
+      });
+
+      const totalLeads = formattedSheets.reduce((sum, s) => sum + s.validRowCount, 0);
+
+      return {
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        role: u.role,
+        status: u.status,
+        displayPassword: u.displayPassword,
+        mustChangePassword: u.mustChangePassword,
+        createdAt: u.createdAt,
+        updatedAt: u.updatedAt,
+        sheets: formattedSheets,
+        totalLeadCount: totalLeads,
+      };
+    });
+
+    return NextResponse.json({
+      users: formattedUsers,
+      stats: {
+        totalAccounts: users.length,
+        totalLeads: totalOrganizationLeads,
+        unassignedLeads: unassignedLeadsCount,
+        totalSheets: allSheets.length,
+      },
+      sheets: sheetSummaries,
+    });
   } catch (error: any) {
+    console.error("Error fetching users:", error);
     return NextResponse.json({ error: "Failed to fetch users" }, { status: 500 });
   }
 }
@@ -209,7 +278,18 @@ export async function PUT(req: Request) {
   }
 
   try {
-    const { userId, email, newPassword, name, role, status, sheetId } = await req.json();
+    const {
+      userId,
+      email,
+      newPassword,
+      name,
+      role,
+      status,
+      sheetId,
+      assignSheetId,
+      unassignSheetId,
+      newSheetName,
+    } = await req.json();
 
     if (!userId) {
       return NextResponse.json({ error: "userId is required" }, { status: 400 });
@@ -259,11 +339,6 @@ export async function PUT(req: Request) {
 
     if (name !== undefined && name.trim()) {
       updateData.name = name.trim();
-      // Synchronize sheet names: update all sheets assigned to this user in DB
-      await prisma.sheet.updateMany({
-        where: { userId },
-        data: { name: name.trim() },
-      });
     }
 
     if (newPassword !== undefined && newPassword.trim()) {
@@ -278,6 +353,33 @@ export async function PUT(req: Request) {
       updateData.mustChangePassword = false;
     }
 
+    // Sheet assignment updates
+    if (assignSheetId) {
+      await prisma.sheet.update({
+        where: { id: assignSheetId },
+        data: { userId },
+      });
+    }
+
+    if (unassignSheetId) {
+      await prisma.sheet.update({
+        where: { id: unassignSheetId },
+        data: { userId: null },
+      });
+    }
+
+    if (newSheetName && newSheetName.trim()) {
+      const sheetCount = await prisma.sheet.count();
+      await prisma.sheet.create({
+        data: {
+          name: newSheetName.trim(),
+          userId,
+          order: sheetCount,
+          columns: JSON.stringify(DEFAULT_COLUMNS),
+        },
+      });
+    }
+
     if (sheetId !== undefined) {
       if (!sheetId || sheetId === "none") {
         await prisma.sheet.updateMany({
@@ -285,16 +387,9 @@ export async function PUT(req: Request) {
           data: { userId: null },
         });
       } else {
-        await prisma.sheet.updateMany({
-          where: { userId },
-          data: { userId: null },
-        });
         await prisma.sheet.update({
           where: { id: sheetId },
-          data: {
-            userId,
-            ...(name && name.trim() ? { name: name.trim() } : {}),
-          },
+          data: { userId },
         });
       }
     }
@@ -315,18 +410,44 @@ export async function PUT(req: Request) {
           select: {
             id: true,
             name: true,
-            _count: {
-              select: { rows: true },
+            order: true,
+            rows: {
+              select: { data: true },
             },
           },
+          orderBy: { order: "asc" },
         },
       },
     });
 
+    const formattedSheets = updated.sheets.map((s) => {
+      const validLeads = s.rows.filter((r) => isValidLead(r.data)).length;
+      return {
+        id: s.id,
+        name: s.name,
+        order: s.order,
+        validRowCount: validLeads,
+        _count: { rows: validLeads },
+      };
+    });
+
+    const totalLeads = formattedSheets.reduce((sum, s) => sum + s.validRowCount, 0);
+
     return NextResponse.json({
       success: true,
       message: "User account updated successfully.",
-      user: updated,
+      user: {
+        id: updated.id,
+        name: updated.name,
+        email: updated.email,
+        role: updated.role,
+        status: updated.status,
+        displayPassword: updated.displayPassword,
+        mustChangePassword: updated.mustChangePassword,
+        updatedAt: updated.updatedAt,
+        sheets: formattedSheets,
+        totalLeadCount: totalLeads,
+      },
     });
   } catch (error: any) {
     console.error("Admin user update error:", error);

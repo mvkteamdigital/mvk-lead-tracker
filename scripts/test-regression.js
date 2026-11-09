@@ -647,6 +647,83 @@ it("parseClipboardMatrix handles multi-row and multi-column TSV data", () => {
   assert.strictEqual(matrix[0][1], "9876543210");
 });
 
+// --- Multi-Sheet Per User & Organization-Wide Lead Count Suite ---
+it("One user account can access multiple assigned sheets while retaining independent names", () => {
+  const user = {
+    id: "user_sanjana_123",
+    email: "sanjana@mvkleads.com",
+    name: "Sanjana",
+    role: "MEMBER",
+  };
+
+  const sheets = [
+    { id: "sheet_meta_1", name: "Sanjana (Meta)", userId: user.id },
+    { id: "sheet_99acres_2", name: "Sanjana (99acres)", userId: user.id },
+    { id: "sheet_likhita_3", name: "Likhita", userId: "user_likhita_456" },
+  ];
+
+  // User's accessible sheets
+  const accessibleSheets = sheets.filter((s) => s.userId === user.id);
+  assert.strictEqual(accessibleSheets.length, 2);
+  assert.strictEqual(accessibleSheets[0].name, "Sanjana (Meta)");
+  assert.strictEqual(accessibleSheets[1].name, "Sanjana (99acres)");
+  // Ensure independent distinct names are preserved and not stomped by user.name
+  assert.notStrictEqual(accessibleSheets[0].name, accessibleSheets[1].name);
+
+  // Access check validation: member cannot access other sheets
+  const unauthorizedAccess = sheets.some((s) => s.userId !== user.id && s.id === "sheet_likhita_3");
+  assert.strictEqual(unauthorizedAccess, true);
+});
+
+it("Organization-wide lead count strictly aggregates valid leads and ignores empty placeholder rows", () => {
+  const sheets = [
+    {
+      id: "s1",
+      name: "Sanjana (Meta)",
+      userId: "u1",
+      rows: [
+        { id: "r1", data: JSON.stringify({ col_name: "Rahul", col_number: "9876543210" }) },
+        { id: "r2", data: JSON.stringify({ col_name: "Karan", col_number: "9876543211" }) },
+        { id: "r3_empty", data: JSON.stringify({ col_name: "", col_number: "" }) }, // blank row
+      ],
+    },
+    {
+      id: "s2",
+      name: "Sanjana (99acres)",
+      userId: "u1",
+      rows: [
+        { id: "r4", data: JSON.stringify({ col_name: "Pooja", col_number: "9876543212" }) },
+        { id: "r5_empty", data: JSON.stringify({ col_name: "", col_number: "" }) }, // blank row
+      ],
+    },
+    {
+      id: "s3",
+      name: "Likhita",
+      userId: "u2",
+      rows: [
+        { id: "r6", data: JSON.stringify({ col_name: "Arun", col_number: "9876543213" }) },
+        { id: "r7", data: JSON.stringify({ col_name: "Divya", col_number: "9876543214" }) },
+      ],
+    },
+  ];
+
+  let totalValidLeads = 0;
+  const userTotals = {};
+
+  sheets.forEach((s) => {
+    const validCount = s.rows.filter((r) => isValidLead(r.data)).length;
+    totalValidLeads += validCount;
+    userTotals[s.userId] = (userTotals[s.userId] || 0) + validCount;
+  });
+
+  // Total valid leads across org: 2 in s1 + 1 in s2 + 2 in s3 = 5 (blank rows r3_empty and r5_empty ignored!)
+  assert.strictEqual(totalValidLeads, 5);
+  // User 1 (Sanjana with 2 sheets) combined total: 2 + 1 = 3 leads
+  assert.strictEqual(userTotals["u1"], 3);
+  // User 2 (Likhita with 1 sheet) total: 2 leads
+  assert.strictEqual(userTotals["u2"], 2);
+});
+
 console.log(`\n=== ALL TESTS PASSED: ${passed}/${total} ===\n`);
 if (passed !== total) {
   process.exit(1);

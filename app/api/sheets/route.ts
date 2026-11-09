@@ -44,10 +44,9 @@ export async function GET() {
 
     const formatted = sheets.map((s) => {
       const validRowCount = s.rows.filter((r) => isValidLead(r.data)).length;
-      const displayName = (s.user?.name && s.user.name.trim()) ? s.user.name.trim() : s.name;
       return {
         id: s.id,
-        name: displayName,
+        name: s.name,
         userId: s.userId,
         order: s.order,
         columns: JSON.parse(s.columns || "[]"),

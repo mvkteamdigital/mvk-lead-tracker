@@ -161,36 +161,25 @@ export function SpreadsheetApp() {
     return counts;
   }, [activeSheet, activeSheetDateFilteredRows]);
 
-  // Derived state: sheet list with reactive real-time valid lead count for the active tab,
-  // pulling tab labels directly from the active, fetched user list state!
+  // Derived state: sheet list with reactive real-time valid lead count for the active tab
   const displayedSheets = useMemo(() => {
     return sheets.map((s) => {
-      // Pull dynamic tab label directly from the active fetched user list state if sheet is assigned
-      const linkedUser = s.userId ? usersById.get(s.userId) : null;
-      const dynamicName = linkedUser?.name?.trim() || s.user?.name?.trim() || s.name;
-
       return {
         ...s,
-        name: dynamicName,
+        name: s.name,
         rowCount:
           activeSheet && s.id === activeSheet.id
             ? activeSheetValidLeadCount
             : s.rowCount,
       };
     });
-  }, [sheets, usersById, activeSheet, activeSheetValidLeadCount]);
+  }, [sheets, activeSheet, activeSheetValidLeadCount]);
 
-  // Active sheet with reactive dynamic name pulled directly from user state
+  // Active sheet
   const currentActiveSheet = useMemo(() => {
     if (!activeSheet) return null;
-    const linkedUser = activeSheet.userId ? usersById.get(activeSheet.userId) : null;
-    const dynamicName = linkedUser?.name?.trim() || activeSheet.user?.name?.trim() || activeSheet.name;
-    if (dynamicName === activeSheet.name) return activeSheet;
-    return {
-      ...activeSheet,
-      name: dynamicName,
-    };
-  }, [activeSheet, usersById]);
+    return activeSheet;
+  }, [activeSheet]);
 
   // Keep the sheets list rowCount in sync with active sheet's valid lead count
   useEffect(() => {
@@ -348,14 +337,13 @@ export function SpreadsheetApp() {
       setUsersList((prev) =>
         prev.map((u) => (u.id === updatedUser.id ? { ...u, ...updatedUser } : u))
       );
-      // 2. Instantly update sheets list state
+      // 2. Instantly update sheets list state with updated user metadata without overwriting custom sheet names
       setSheets((prev) =>
         prev.map((s) =>
           s.userId === updatedUser.id
             ? {
                 ...s,
-                name: updatedUser.name,
-                user: s.user ? { ...s.user, name: updatedUser.name } : s.user,
+                user: s.user ? { ...s.user, name: updatedUser.name, email: updatedUser.email, role: updatedUser.role } : s.user,
               }
             : s
         )
@@ -366,8 +354,7 @@ export function SpreadsheetApp() {
         if (prev.userId === updatedUser.id) {
           return {
             ...prev,
-            name: updatedUser.name,
-            user: prev.user ? { ...prev.user, name: updatedUser.name } : prev.user,
+            user: prev.user ? { ...prev.user, name: updatedUser.name, email: updatedUser.email, role: updatedUser.role } : prev.user,
           };
         }
         return prev;
@@ -1004,13 +991,7 @@ export function SpreadsheetApp() {
         if (activeSheet && activeSheet.id === id) {
           setActiveSheet((prev) => (prev ? { ...prev, name: newName } : prev));
         }
-        // Also update usersList if this sheet is assigned to a user
-        const targetSheet = sheets.find((s) => s.id === id);
-        if (targetSheet?.userId) {
-          setUsersList((prev) =>
-            prev.map((u) => (u.id === targetSheet.userId ? { ...u, name: newName } : u))
-          );
-        }
+        await fetchSheets();
       }
     } catch (err) {
       console.error(err);

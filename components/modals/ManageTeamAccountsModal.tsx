@@ -23,7 +23,16 @@ import {
   EyeOff,
   Copy,
   User,
+  Layers,
 } from "lucide-react";
+
+interface SheetItem {
+  id: string;
+  name: string;
+  order?: number;
+  validRowCount?: number;
+  _count?: { rows: number };
+}
 
 interface UserRecord {
   id: string;
@@ -33,13 +42,22 @@ interface UserRecord {
   status?: string;
   displayPassword?: string;
   mustChangePassword: boolean;
-  sheets: { id: string; name: string; _count: { rows: number } }[];
+  sheets: SheetItem[];
+  totalLeadCount?: number;
+}
+
+interface AdminStats {
+  totalAccounts: number;
+  totalLeads: number;
+  unassignedLeads: number;
+  totalSheets: number;
 }
 
 interface SheetOption {
   id: string;
   name: string;
   userId: string | null;
+  validRowCount?: number;
 }
 
 interface ManageTeamAccountsModalProps {
@@ -62,12 +80,18 @@ export function ManageTeamAccountsModal({
 
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [availableSheets, setAvailableSheets] = useState<SheetOption[]>([]);
+  const [stats, setStats] = useState<AdminStats>({
+    totalAccounts: 0,
+    totalLeads: 0,
+    unassignedLeads: 0,
+    totalSheets: 0,
+  });
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [notification, setNotification] = useState<{ type: "success" | "error"; msg: string } | null>(null);
   const [savingAction, setSavingAction] = useState(false);
 
-  // 1. Add New Member State
+  // 1. Add New Member State (Full Account Creation)
   const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
   const [newMemberName, setNewMemberName] = useState("");
   const [newMemberEmail, setNewMemberEmail] = useState("");
@@ -76,14 +100,19 @@ export function ManageTeamAccountsModal({
   const [newMemberSheetOption, setNewMemberSheetOption] = useState<string>("new");
   const [showAddPassword, setShowAddPassword] = useState(false);
 
-  // 2. Manage / View Password Dialog State
+  // 2. Assign / Create Sheet Tab for Existing Member State
+  const [isAddTabOpen, setIsAddTabOpen] = useState(false);
+  const [selectedMemberForTab, setSelectedMemberForTab] = useState<string>("");
+  const [newTabSheetName, setNewTabSheetName] = useState<string>("");
+
+  // 3. Manage / View Password Dialog State
   const [managingPasswordUser, setManagingPasswordUser] = useState<UserRecord | null>(null);
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [newCustomPassword, setNewCustomPassword] = useState("");
   const [showNewCustomPassword, setShowNewCustomPassword] = useState(false);
   const [copiedCredentials, setCopiedCredentials] = useState(false);
 
-  // 3. Edit User Details Dialog State
+  // 4. Edit User Details Dialog State
   const [editingUser, setEditingUser] = useState<UserRecord | null>(null);
   const [editName, setEditName] = useState("");
   const [editEmail, setEditEmail] = useState("");
@@ -102,6 +131,9 @@ export function ManageTeamAccountsModal({
       if (usersRes.ok) {
         const uData = await usersRes.json();
         setUsers(uData.users || []);
+        if (uData.stats) {
+          setStats(uData.stats);
+        }
       }
       if (sheetsRes.ok) {
         const sData = await sheetsRes.json();
@@ -117,6 +149,63 @@ export function ManageTeamAccountsModal({
   useEffect(() => {
     fetchData();
   }, []);
+
+  // --- ASSIGN / CREATE SHEET TAB FOR EXISTING MEMBER HANDLER ---
+  const handleCreateTabForMember = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedMemberForTab) {
+      setNotification({ type: "error", msg: "Please select a team member." });
+      return;
+    }
+    if (!newTabSheetName.trim()) {
+      setNotification({ type: "error", msg: "Please enter a sheet tab name." });
+      return;
+    }
+
+    setSavingAction(true);
+    setNotification(null);
+
+    try {
+      const res = await fetch("/api/sheets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newTabSheetName.trim(),
+          userId: selectedMemberForTab,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to create sheet tab.");
+
+      const targetMember = users.find((u) => u.id === selectedMemberForTab);
+      setNotification({
+        type: "success",
+        msg: `Sheet tab "${newTabSheetName.trim()}" created and assigned to ${targetMember?.name || "member"}!`,
+      });
+
+      setNewTabSheetName("");
+      setSelectedMemberForTab("");
+      setIsAddTabOpen(false);
+
+      await fetchData();
+      if (onRefreshSheets) onRefreshSheets();
+    } catch (err: any) {
+      setNotification({ type: "error", msg: err.message || "Failed to create sheet tab." });
+    } finally {
+      setSavingAction(false);
+    }
+  };
+
+  const handleQuickAddTab = (u: UserRecord) => {
+    setSelectedMemberForTab(u.id);
+    setNewTabSheetName(`${u.name} (Source)`);
+    setIsAddTabOpen(true);
+    setIsAddMemberOpen(false);
+    setEditingUser(null);
+    setManagingPasswordUser(null);
+    setNotification(null);
+  };
 
   // --- ADD NEW MEMBER HANDLER ---
   const handleCreateNewMember = async (e: React.FormEvent) => {
@@ -188,7 +277,7 @@ export function ManageTeamAccountsModal({
     setEditName(u.name);
     setEditEmail(u.email);
     setEditRole((u.role as "MEMBER" | "ADMIN") || "MEMBER");
-    setEditSheetId(u.sheets?.[0]?.id || "none");
+    setEditSheetId("none");
     setNotification(null);
   };
 
@@ -216,7 +305,6 @@ export function ManageTeamAccountsModal({
           name: editName.trim(),
           email: editEmail.trim(),
           role: editRole,
-          sheetId: editSheetId,
         }),
       });
 
@@ -243,6 +331,67 @@ export function ManageTeamAccountsModal({
       if (onRefreshSheets) onRefreshSheets();
     } catch (err: any) {
       setNotification({ type: "error", msg: err.message || "Failed to update details." });
+    } finally {
+      setSavingAction(false);
+    }
+  };
+
+  const handleUnassignSheetFromEditUser = async (sheetId: string) => {
+    if (!editingUser) return;
+    setSavingAction(true);
+    try {
+      const res = await fetch("/api/users", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: editingUser.id,
+          unassignSheetId: sheetId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to unassign sheet.");
+      setNotification({
+        type: "success",
+        msg: "Sheet tab successfully unassigned from member.",
+      });
+      if (data.user) {
+        setEditingUser(data.user);
+      }
+      await fetchData();
+      if (onRefreshSheets) onRefreshSheets();
+    } catch (err: any) {
+      setNotification({ type: "error", msg: err.message || "Failed to unassign sheet." });
+    } finally {
+      setSavingAction(false);
+    }
+  };
+
+  const handleAssignSheetToEditUser = async (sheetId: string) => {
+    if (!editingUser || !sheetId || sheetId === "none") return;
+    setSavingAction(true);
+    try {
+      const res = await fetch("/api/users", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: editingUser.id,
+          assignSheetId: sheetId,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to assign sheet.");
+      setNotification({
+        type: "success",
+        msg: "Sheet tab successfully assigned to member!",
+      });
+      if (data.user) {
+        setEditingUser(data.user);
+      }
+      setEditSheetId("none");
+      await fetchData();
+      if (onRefreshSheets) onRefreshSheets();
+    } catch (err: any) {
+      setNotification({ type: "error", msg: err.message || "Failed to assign sheet." });
     } finally {
       setSavingAction(false);
     }
@@ -440,11 +589,13 @@ export function ManageTeamAccountsModal({
             </button>
           </div>
 
-          {/* Prominent "Add New Member" Button */}
-          <div className="flex items-center gap-2.5 justify-between sm:justify-end">
+          {/* Action Buttons: Add New Member & Add Tab for Member & Summary Metrics */}
+          <div className="flex items-center gap-2.5 flex-wrap justify-between sm:justify-end">
+            {/* 1. Add New Member Button */}
             <button
               onClick={() => {
                 setIsAddMemberOpen(!isAddMemberOpen);
+                setIsAddTabOpen(false);
                 setEditingUser(null);
                 setManagingPasswordUser(null);
                 setNotification(null);
@@ -455,10 +606,43 @@ export function ManageTeamAccountsModal({
               <span>Add New Member</span>
             </button>
 
-            <div className="text-xs text-slate-500 flex items-center gap-1 font-medium">
+            {/* 2. Assign / Add Tab to Existing Member Button */}
+            <button
+              onClick={() => {
+                setIsAddTabOpen(!isAddTabOpen);
+                setIsAddMemberOpen(false);
+                setEditingUser(null);
+                setManagingPasswordUser(null);
+                setNotification(null);
+              }}
+              className="px-3 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold text-xs rounded-xl shadow-md flex items-center gap-1.5 transition-all active:scale-95"
+              title="Add an additional sheet tab to an existing member (e.g. Sanjana 99acres)"
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5" />
+              <span>+ Add Tab to Member</span>
+            </button>
+
+            {/* 3. Summary Metric: Total Accounts */}
+            <div className="text-xs text-slate-700 flex items-center gap-1.5 font-bold bg-slate-100 border border-slate-300 px-2.5 py-1 rounded-xl shadow-2xs">
               <Shield className="h-3.5 w-3.5 text-purple-600" />
-              <span>{users.length} Total Accounts</span>
+              <span>{stats.totalAccounts || users.length} Accounts</span>
             </div>
+
+            {/* 4. Prominent New Summary Metric: TOTAL LEADS */}
+            <div className="text-xs flex items-center gap-1.5 font-extrabold bg-gradient-to-r from-amber-100 to-amber-200/90 border border-amber-400 text-amber-950 px-3 py-1 rounded-xl shadow-2xs">
+              <Layers className="h-3.5 w-3.5 text-amber-800" />
+              <span>TOTAL LEADS:</span>
+              <span className="bg-amber-600 text-white px-2 py-0.5 rounded-md font-black text-xs">
+                {stats.totalLeads}
+              </span>
+            </div>
+
+            {/* 5. Unassigned Leads Alert (if any exist) */}
+            {stats.unassignedLeads > 0 && (
+              <div className="text-xs text-rose-700 flex items-center gap-1 font-bold bg-rose-50 border border-rose-300 px-2.5 py-1 rounded-xl">
+                <span>⚠️ {stats.unassignedLeads} Unassigned Leads</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -481,6 +665,95 @@ export function ManageTeamAccountsModal({
             >
               Dismiss
             </button>
+          </div>
+        )}
+
+        {/* Collapsible "Assign / Add Sheet Tab to Existing Member" Panel */}
+        {isAddTabOpen && (
+          <div className="p-4 sm:p-5 bg-gradient-to-br from-purple-50/80 to-slate-50 border-b-2 border-purple-300 shrink-0 animate-in slide-in-from-top-2 duration-150">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <div className="h-6 w-6 rounded-lg bg-purple-600 text-white flex items-center justify-center font-bold text-xs">
+                  <FileSpreadsheet className="h-3.5 w-3.5" />
+                </div>
+                <h4 className="text-xs sm:text-sm font-extrabold text-slate-900">
+                  Assign or Create Additional Sheet Tab for Existing Member
+                </h4>
+              </div>
+              <button
+                onClick={() => setIsAddTabOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-md"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <p className="text-[11px] text-slate-600 mb-3">
+              One member account can have multiple sheet tabs (e.g. Sanjana Meta, Sanjana 99acres).
+              This preserves the member&apos;s existing login credentials while providing access to multiple independent sheets.
+            </p>
+
+            <form onSubmit={handleCreateTabForMember} className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+              {/* 1. Select Existing Member */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                  Select Team Member *
+                </label>
+                <select
+                  required
+                  value={selectedMemberForTab}
+                  onChange={(e) => {
+                    setSelectedMemberForTab(e.target.value);
+                    const selected = users.find((u) => u.id === e.target.value);
+                    if (selected && !newTabSheetName) {
+                      setNewTabSheetName(`${selected.name} (Source)`);
+                    }
+                  }}
+                  className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 font-semibold text-slate-900"
+                >
+                  <option value="">-- Choose Member --</option>
+                  {users.map((u) => (
+                    <option key={u.id} value={u.id}>
+                      {u.name} ({u.email}) - {u.sheets.length} current {u.sheets.length === 1 ? "sheet" : "sheets"}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* 2. Custom Sheet Name */}
+              <div>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                  Custom Sheet Tab Name *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Sanjana (99acres) or Q4 Meta"
+                  value={newTabSheetName}
+                  onChange={(e) => setNewTabSheetName(e.target.value)}
+                  className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 font-medium text-slate-900"
+                />
+              </div>
+
+              {/* 3. Actions */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="submit"
+                  disabled={savingAction}
+                  className="flex-1 py-1.5 px-3 bg-purple-700 hover:bg-purple-800 active:scale-95 text-white font-bold text-xs rounded-lg transition-all shadow-xs flex items-center justify-center gap-1.5"
+                >
+                  <Check className="h-3.5 w-3.5 text-amber-300" />
+                  <span>{savingAction ? "Creating..." : "Create & Assign Tab"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsAddTabOpen(false)}
+                  className="py-1.5 px-3 bg-white hover:bg-slate-100 text-slate-600 border border-slate-300 rounded-lg text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
           </div>
         )}
 
@@ -731,18 +1004,81 @@ export function ManageTeamAccountsModal({
                             )}
                           </td>
 
-                          {/* 5. Sheet Tab */}
-                          <td className="py-3 px-4 text-slate-600">
-                            {sheet ? (
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-slate-100 border border-slate-200 font-semibold text-[11px] text-slate-800 shadow-2xs">
-                                <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
-                                <span>{sheet.name}</span>
-                                <span className="text-[10px] text-slate-400 font-normal">
-                                  ({sheet._count.rows} leads)
-                                </span>
-                              </span>
+                          {/* 5. Sheet Tab(s) & Individual Lead Counts */}
+                          <td className="py-3 px-4 text-slate-700">
+                            {(!u.sheets || u.sheets.length === 0) ? (
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-slate-400 italic text-[11px]">Unassigned</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleQuickAddTab(u)}
+                                  className="text-[10px] font-bold text-purple-700 hover:text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-1.5 py-0.5 rounded transition-colors"
+                                  title={`Assign a sheet tab to ${u.name}`}
+                                >
+                                  + Tab
+                                </button>
+                              </div>
+                            ) : u.sheets.length === 1 ? (
+                              (() => {
+                                const s = u.sheets[0];
+                                const leadCount = s.validRowCount !== undefined ? s.validRowCount : (s._count?.rows ?? 0);
+                                return (
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200 font-semibold text-[11px] text-slate-800 shadow-2xs">
+                                      <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600 shrink-0" />
+                                      <span className="font-bold">{s.name}</span>
+                                      <span className="text-[10px] px-1.5 py-0.2 rounded-full font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                        {leadCount} {leadCount === 1 ? "lead" : "leads"}
+                                      </span>
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleQuickAddTab(u)}
+                                      className="text-[10px] font-bold text-purple-700 hover:text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-1.5 py-0.5 rounded transition-colors"
+                                      title={`Add an additional sheet tab for ${u.name}`}
+                                    >
+                                      + Tab
+                                    </button>
+                                  </div>
+                                );
+                              })()
                             ) : (
-                              <span className="text-slate-400 italic text-[11px]">Unassigned</span>
+                              (() => {
+                                const total = u.totalLeadCount ?? u.sheets.reduce((sum, s) => sum + (s.validRowCount ?? s._count?.rows ?? 0), 0);
+                                return (
+                                  <div className="space-y-1.5 py-0.5">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="inline-flex items-center gap-1 text-[11px] font-extrabold text-amber-950 bg-amber-100/90 border border-amber-300 px-2 py-0.5 rounded-md shadow-2xs">
+                                        <Layers className="h-3 w-3 text-amber-700 shrink-0" />
+                                        <span>{total} Total Leads</span>
+                                        <span className="text-[10px] font-semibold text-amber-800">({u.sheets.length} tabs)</span>
+                                      </span>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleQuickAddTab(u)}
+                                        className="text-[10px] font-bold text-purple-700 hover:text-purple-900 bg-purple-50 hover:bg-purple-100 border border-purple-200 px-1.5 py-0.5 rounded transition-colors"
+                                        title={`Add another sheet tab for ${u.name}`}
+                                      >
+                                        + Tab
+                                      </button>
+                                    </div>
+                                    <div className="pl-1 space-y-0.5">
+                                      {u.sheets.map((s) => {
+                                        const sLeads = s.validRowCount !== undefined ? s.validRowCount : (s._count?.rows ?? 0);
+                                        return (
+                                          <div key={s.id} className="text-[11px] text-slate-700 flex items-center gap-1.5">
+                                            <span className="text-slate-400 font-bold">•</span>
+                                            <span className="font-semibold text-slate-800">{s.name}:</span>
+                                            <span className="text-slate-600 font-mono text-[10px] bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200">
+                                              {sLeads} {sLeads === 1 ? "lead" : "leads"}
+                                            </span>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                );
+                              })()
                             )}
                           </td>
 
@@ -1059,23 +1395,85 @@ export function ManageTeamAccountsModal({
                 </select>
               </div>
 
-              {/* Assigned Sheet Tab */}
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Assigned Sheet Tab
-                </label>
-                <select
-                  value={editSheetId}
-                  onChange={(e) => setEditSheetId(e.target.value)}
-                  className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-500 font-medium text-slate-900"
-                >
-                  <option value="none">No Sheet Assigned</option>
-                  {availableSheets.map((sh) => (
-                    <option key={sh.id} value={sh.id}>
-                      {sh.name} {sh.userId === editingUser.id ? "(Currently Assigned)" : sh.userId ? "(Assigned to other)" : "(Unassigned)"}
-                    </option>
-                  ))}
-                </select>
+              {/* Assigned Sheet Tabs List & Manager */}
+              <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <FileSpreadsheet className="h-3.5 w-3.5 text-purple-600" />
+                    <span>Assigned Sheet Tabs ({editingUser.sheets?.length || 0})</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingUser(null);
+                      handleQuickAddTab(editingUser);
+                    }}
+                    className="text-[10px] font-bold text-purple-700 hover:text-purple-900 bg-white hover:bg-purple-50 border border-purple-200 px-2 py-0.5 rounded-lg transition-colors flex items-center gap-1"
+                  >
+                    <Plus className="h-3 w-3 stroke-[3]" />
+                    <span>New Tab for Member</span>
+                  </button>
+                </div>
+
+                {(!editingUser.sheets || editingUser.sheets.length === 0) ? (
+                  <p className="text-[11px] text-slate-400 italic">No sheets currently assigned to this member.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {editingUser.sheets.map((s) => {
+                      const count = s.validRowCount !== undefined ? s.validRowCount : (s._count?.rows ?? 0);
+                      return (
+                        <div
+                          key={s.id}
+                          className="flex items-center justify-between bg-white px-2.5 py-1.5 rounded-lg border border-slate-200 text-xs shadow-2xs"
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900">{s.name}</span>
+                            <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-mono border border-slate-200">
+                              {count} {count === 1 ? "lead" : "leads"}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleUnassignSheetFromEditUser(s.id)}
+                            disabled={savingAction}
+                            className="text-[10px] text-rose-600 hover:text-rose-800 hover:bg-rose-50 px-2 py-0.5 rounded font-semibold transition-colors"
+                            title="Unlink this sheet from this member"
+                          >
+                            Unassign
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Assign Available Sheet */}
+                {availableSheets.filter((sh) => !sh.userId || sh.userId !== editingUser.id).length > 0 && (
+                  <div className="pt-2 border-t border-slate-200 flex items-center gap-2">
+                    <select
+                      value={editSheetId}
+                      onChange={(e) => setEditSheetId(e.target.value)}
+                      className="flex-1 px-2.5 py-1 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 font-medium text-slate-800"
+                    >
+                      <option value="none">-- Assign Existing Sheet --</option>
+                      {availableSheets
+                        .filter((sh) => !sh.userId)
+                        .map((sh) => (
+                          <option key={sh.id} value={sh.id}>
+                            {sh.name} (Unassigned)
+                          </option>
+                        ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={savingAction || editSheetId === "none"}
+                      onClick={() => handleAssignSheetToEditUser(editSheetId)}
+                      className="px-2.5 py-1 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition-colors shadow-2xs"
+                    >
+                      Assign
+                    </button>
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
