@@ -1,9 +1,10 @@
 "use client";
 
 import React from "react";
+import { ActiveCell } from "@/lib/types";
 
 interface FormulaBarProps {
-  activeCell: { rowIdx: number; colId: string; colName: string } | null;
+  activeCell: ActiveCell | null;
   cellValue: string;
   onCellValueChange: (val: string) => void;
   onCommit: () => void;

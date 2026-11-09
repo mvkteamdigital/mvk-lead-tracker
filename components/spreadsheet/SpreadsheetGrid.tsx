@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
+import { SheetDetail, ColumnDef, RowData, CellStyle, ActiveCell } from "@/lib/types";
 import { STATUS_COLORS, SOURCE_COLORS, getSourceColor, DEFAULT_LEAD_SOURCES, DEFAULT_FOLLOWUP_OPTIONS } from "@/lib/defaults";
 import {
   rowMatchesStatusFilter,
@@ -36,8 +36,8 @@ interface SpreadsheetGridProps {
   onDeleteRows: (rowIds: string[]) => Promise<void>;
   onUpdateColumns: (columns: ColumnDef[]) => Promise<void>;
   onOpenDropdownModal: (col: ColumnDef) => void;
-  activeCell: { rowIdx: number; colId: string; colName: string } | null;
-  setActiveCell: (cell: { rowIdx: number; colId: string; colName: string } | null) => void;
+  activeCell: ActiveCell | null;
+  setActiveCell: (cell: ActiveCell | null) => void;
   searchQuery: string;
   statusFilter?: string | null;
   dateFilter?: string | null;
@@ -262,7 +262,7 @@ interface GridRowProps {
   row: RowData;
   columns: ColumnDef[];
   isRowSelected: boolean;
-  activeCell: { rowIdx: number; colId: string; colName: string } | null;
+  activeCell: ActiveCell | null;
   selectionRange: { startRow: number; endRow: number; startCol: number; endCol: number } | null;
   isMultiCell: boolean;
   editingCell: { rowId: string; colId: string; rowIdx: number } | null;
@@ -271,14 +271,14 @@ interface GridRowProps {
   onCommitEdit: () => void;
   onPaste?: (e: React.ClipboardEvent) => void;
   editInputRef: React.RefObject<HTMLInputElement>;
-  onRowHeaderClick: (e: React.MouseEvent, rowIdx: number) => void;
+  onRowHeaderClick: (e: React.MouseEvent, row: RowData, rowIdx: number) => void;
   onRowContextMenu: (e: React.MouseEvent, rowId: string, rowIdx: number) => void;
-  onCellMouseDown: (e: React.MouseEvent, rowIdx: number, colIdx: number, col: ColumnDef) => void;
+  onCellMouseDown: (e: React.MouseEvent, row: RowData, rowIdx: number, colIdx: number, col: ColumnDef) => void;
   onCellMouseEnter: (rowIdx: number, colIdx: number) => void;
-  onCellDoubleClick: (rowIdx: number, col: ColumnDef) => void;
-  onCellContextMenu: (e: React.MouseEvent, rowIdx: number, colIdx: number, col: ColumnDef) => void;
-  onDropdownClick: (e: React.MouseEvent, rowIdx: number, colIdx: number, col: ColumnDef) => void;
-  onStartEditing: (rowIdx: number, col: ColumnDef) => void;
+  onCellDoubleClick: (row: RowData, rowIdx: number, col: ColumnDef) => void;
+  onCellContextMenu: (e: React.MouseEvent, row: RowData, rowIdx: number, colIdx: number, col: ColumnDef) => void;
+  onDropdownClick: (e: React.MouseEvent, row: RowData, rowIdx: number, colIdx: number, col: ColumnDef) => void;
+  onStartEditing: (row: RowData, rowIdx: number, col: ColumnDef) => void;
 }
 
 const GridRow = ({
@@ -323,7 +323,7 @@ const GridRow = ({
             ? "bg-blue-100 font-bold text-blue-900 border-r-2 border-r-blue-600"
             : "bg-slate-100 hover:bg-slate-200 text-slate-500"
         }`}
-        onClick={(e) => onRowHeaderClick(e, rowIdx)}
+        onClick={(e) => onRowHeaderClick(e, row, rowIdx)}
         onContextMenu={(e) => onRowContextMenu(e, row.id, rowIdx)}
       >
         {serialNumber}
@@ -332,8 +332,14 @@ const GridRow = ({
       {/* Cells */}
       {columns.map((col, colIdx) => {
         const cellVal = row.data?.[col.id] || "";
-        const isActive = activeCell?.rowIdx === rowIdx && activeCell?.colId === col.id;
-        const isEditing = editingCell?.rowIdx === rowIdx && editingCell?.colId === col.id;
+        const isActive =
+          (activeCell?.rowId && !activeCell.rowId.startsWith("temp_")
+            ? activeCell.rowId === row.id
+            : activeCell?.rowIdx === rowIdx) && activeCell?.colId === col.id;
+        const isEditing =
+          (editingCell?.rowId && !editingCell.rowId.startsWith("temp_")
+            ? editingCell.rowId === row.id
+            : editingCell?.rowIdx === rowIdx) && editingCell?.colId === col.id;
         const cellStyle = row.styles?.[col.id];
 
         const isSelected =
@@ -370,12 +376,12 @@ const GridRow = ({
             onCommitEdit={isEditing ? onCommitEdit : undefined}
             onPaste={onPaste}
             editInputRef={isEditing ? editInputRef : undefined}
-            onCellMouseDown={onCellMouseDown}
+            onCellMouseDown={(e, rIdx, cIdx, c) => onCellMouseDown(e, row, rIdx, cIdx, c)}
             onCellMouseEnter={onCellMouseEnter}
-            onCellDoubleClick={onCellDoubleClick}
-            onCellContextMenu={onCellContextMenu}
-            onDropdownClick={onDropdownClick}
-            onStartEditing={onStartEditing}
+            onCellDoubleClick={(rIdx, c) => onCellDoubleClick(row, rIdx, c)}
+            onCellContextMenu={(e, rIdx, cIdx, c) => onCellContextMenu(e, row, rIdx, cIdx, c)}
+            onDropdownClick={(e, rIdx, cIdx, c) => onDropdownClick(e, row, rIdx, cIdx, c)}
+            onStartEditing={(rIdx, c) => onStartEditing(row, rIdx, c)}
           />
         );
       })}
@@ -394,14 +400,34 @@ const MemoizedGridRow = React.memo(GridRow, (prev, next) => {
   if (prev.isRowSelected !== next.isRowSelected) return false;
 
   // Active cell entered or left this row?
-  const prevHasActive = prev.activeCell?.rowIdx === prev.rowIdx;
-  const nextHasActive = next.activeCell?.rowIdx === next.rowIdx;
+  const prevHasActive =
+    prev.activeCell !== null &&
+    (prev.activeCell.rowId && !prev.activeCell.rowId.startsWith("temp_")
+      ? prev.activeCell.rowId === prev.row.id
+      : prev.activeCell.rowIdx === prev.rowIdx);
+
+  const nextHasActive =
+    next.activeCell !== null &&
+    (next.activeCell.rowId && !next.activeCell.rowId.startsWith("temp_")
+      ? next.activeCell.rowId === next.row.id
+      : next.activeCell.rowIdx === next.rowIdx);
+
   if (prevHasActive !== nextHasActive) return false;
   if (nextHasActive && prev.activeCell?.colId !== next.activeCell?.colId) return false;
 
   // Editing entered or left this row?
-  const prevIsEditing = prev.editingCell?.rowIdx === prev.rowIdx;
-  const nextIsEditing = next.editingCell?.rowIdx === next.rowIdx;
+  const prevIsEditing =
+    prev.editingCell !== null &&
+    (prev.editingCell.rowId && !prev.editingCell.rowId.startsWith("temp_")
+      ? prev.editingCell.rowId === prev.row.id
+      : prev.editingCell.rowIdx === prev.rowIdx);
+
+  const nextIsEditing =
+    next.editingCell !== null &&
+    (next.editingCell.rowId && !next.editingCell.rowId.startsWith("temp_")
+      ? next.editingCell.rowId === next.row.id
+      : next.editingCell.rowIdx === next.rowIdx);
+
   if (prevIsEditing !== nextIsEditing) return false;
   if (nextIsEditing && prev.editValue !== next.editValue) return false;
 
@@ -531,14 +557,41 @@ export function SpreadsheetGrid({
   const [draggedColIdx, setDraggedColIdx] = useState<number | null>(null);
   const [dragOverColIdx, setDragOverColIdx] = useState<number | null>(null);
 
-  // Total row count: at least 1,000 blank rows or rows count + 10
+  // Dynamic filter state: when searching, filtering by date, or filtering by status
+  const isFiltered = Boolean(dateFilter || statusFilter || searchQuery.trim());
+
+  const filteredRows = useMemo(() => {
+    if (!isFiltered) return [];
+    return filterSheetRows(sheet.rows, sheet.columns, {
+      dateFilter,
+      statusFilter,
+      searchQuery,
+    });
+  }, [sheet.rows, sheet.columns, isFiltered, dateFilter, statusFilter, searchQuery]);
+
+  // Total row count: in filtered mode, matches filtered rows count; in normal mode, at least 1,000 blank rows
   const totalRowCount = useMemo(() => {
+    if (isFiltered) {
+      return filteredRows.length;
+    }
     return Math.max(1000, sheet.rows.length + 10, expandedRowCount);
-  }, [sheet.rows.length, expandedRowCount]);
+  }, [isFiltered, filteredRows.length, sheet.rows.length, expandedRowCount]);
 
   // Helper to get row data at index without relying on colliding order fields
   const getRowAtIndex = useCallback(
     (index: number): RowData => {
+      if (isFiltered) {
+        if (index >= 0 && index < filteredRows.length) {
+          return filteredRows[index];
+        }
+        return {
+          id: `temp_${index}`,
+          sheetId: sheet.id,
+          order: index,
+          data: {},
+          styles: {},
+        };
+      }
       if (index >= 0 && index < sheet.rows.length) {
         return sheet.rows[index];
       }
@@ -550,7 +603,7 @@ export function SpreadsheetGrid({
         styles: {},
       };
     },
-    [sheet.rows, sheet.id]
+    [isFiltered, filteredRows, sheet.rows, sheet.id]
   );
 
   // Dynamic windowing calculations with ResizeObserver
@@ -589,18 +642,6 @@ export function SpreadsheetGrid({
     }
     return indices;
   }, [startIndex, endIndex]);
-
-  // Dynamic filter state: when searching, filtering by date, or filtering by status
-  const isFiltered = Boolean(dateFilter || statusFilter || searchQuery.trim());
-
-  const filteredRows = useMemo(() => {
-    if (!isFiltered) return [];
-    return filterSheetRows(sheet.rows, sheet.columns, {
-      dateFilter,
-      statusFilter,
-      searchQuery,
-    });
-  }, [sheet.rows, sheet.columns, isFiltered, dateFilter, statusFilter, searchQuery]);
 
   // Focus editing input on entering edit mode
   useEffect(() => {
@@ -713,45 +754,47 @@ export function SpreadsheetGrid({
       const maxColIdx = sheet.columns.length - 1;
 
       if (moveDirection === "down" && activeCell.rowIdx < maxRowIdx) {
-        const nextRow = activeCell.rowIdx + 1;
-        setActiveCell({ rowIdx: nextRow, colId: activeCell.colId, colName: activeCell.colName });
-        setSelectionAnchor({ rowIdx: nextRow, colIdx: currentColIdx });
-        setSelectionFocus({ rowIdx: nextRow, colIdx: currentColIdx });
+        const nextRowIdx = activeCell.rowIdx + 1;
+        const targetRow = getRowAtIndex(nextRowIdx);
+        setActiveCell({ rowId: targetRow?.id, rowIdx: nextRowIdx, colId: activeCell.colId, colName: activeCell.colName });
+        setSelectionAnchor({ rowIdx: nextRowIdx, colIdx: currentColIdx });
+        setSelectionFocus({ rowIdx: nextRowIdx, colIdx: currentColIdx });
       } else if (moveDirection === "up" && activeCell.rowIdx > 0) {
-        const nextRow = activeCell.rowIdx - 1;
-        setActiveCell({ rowIdx: nextRow, colId: activeCell.colId, colName: activeCell.colName });
-        setSelectionAnchor({ rowIdx: nextRow, colIdx: currentColIdx });
-        setSelectionFocus({ rowIdx: nextRow, colIdx: currentColIdx });
+        const nextRowIdx = activeCell.rowIdx - 1;
+        const targetRow = getRowAtIndex(nextRowIdx);
+        setActiveCell({ rowId: targetRow?.id, rowIdx: nextRowIdx, colId: activeCell.colId, colName: activeCell.colName });
+        setSelectionAnchor({ rowIdx: nextRowIdx, colIdx: currentColIdx });
+        setSelectionFocus({ rowIdx: nextRowIdx, colIdx: currentColIdx });
       } else if (moveDirection === "right" && currentColIdx < maxColIdx) {
         const nextCol = sheet.columns[currentColIdx + 1];
-        setActiveCell({ rowIdx: activeCell.rowIdx, colId: nextCol.id, colName: nextCol.name });
+        setActiveCell({ rowId: activeCell.rowId, rowIdx: activeCell.rowIdx, colId: nextCol.id, colName: nextCol.name });
         setSelectionAnchor({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx + 1 });
         setSelectionFocus({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx + 1 });
       } else if (moveDirection === "left" && currentColIdx > 0) {
         const prevCol = sheet.columns[currentColIdx - 1];
-        setActiveCell({ rowIdx: activeCell.rowIdx, colId: prevCol.id, colName: prevCol.name });
+        setActiveCell({ rowId: activeCell.rowId, rowIdx: activeCell.rowIdx, colId: prevCol.id, colName: prevCol.name });
         setSelectionAnchor({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx - 1 });
         setSelectionFocus({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx - 1 });
       }
     }
-  }, [editValue, onUpdateCell, activeCell, sheet.columns, totalRowCount, setActiveCell]);
+  }, [editValue, onUpdateCell, activeCell, sheet.columns, totalRowCount, getRowAtIndex, setActiveCell]);
 
   // Start in-cell edit
-  const startEditing = useCallback((rowIdx: number, col: ColumnDef) => {
+  const startEditing = useCallback((row: RowData, rowIdx: number, col: ColumnDef) => {
     if (col.type === "dropdown") return;
-    const row = getRowAtIndex(rowIdx);
     setEditingCell({ rowId: row.id, colId: col.id, rowIdx });
     setEditValue(row.data[col.id] || "");
-  }, [getRowAtIndex]);
+  }, []);
 
   // Handle cell double click
-  const handleCellDoubleClick = useCallback((rowIdx: number, col: ColumnDef) => {
-    startEditing(rowIdx, col);
+  const handleCellDoubleClick = useCallback((row: RowData, rowIdx: number, col: ColumnDef) => {
+    startEditing(row, rowIdx, col);
   }, [startEditing]);
 
   // Handle cell mouse down (click, Shift-click, or start of click-and-drag)
   const handleCellMouseDown = useCallback((
     e: React.MouseEvent,
+    row: RowData,
     rowIdx: number,
     colIdx: number,
     col: ColumnDef
@@ -773,7 +816,7 @@ export function SpreadsheetGrid({
     if (e.shiftKey && selectionAnchorRef.current) {
       setSelectionFocus({ rowIdx, colIdx });
     } else {
-      setActiveCell({ rowIdx, colId: col.id, colName: col.name });
+      setActiveCell({ rowId: row.id, rowIdx, colId: col.id, colName: col.name });
       setSelectionAnchor({ rowIdx, colIdx });
       setSelectionFocus({ rowIdx, colIdx });
       setIsMouseDown(true);
@@ -789,7 +832,7 @@ export function SpreadsheetGrid({
   }, []);
 
   // Row header click (selects the entire row across all columns, like Google Sheets)
-  const handleRowHeaderClick = useCallback((e: React.MouseEvent, rowIdx: number) => {
+  const handleRowHeaderClick = useCallback((e: React.MouseEvent, row: RowData, rowIdx: number) => {
     e.preventDefault();
     if (editingCellRef.current) {
       commitEdit();
@@ -801,6 +844,7 @@ export function SpreadsheetGrid({
     const firstCol = sheet.columns[0];
     if (!firstCol) return;
     setActiveCell({
+      rowId: row.id,
       rowIdx,
       colId: firstCol.id,
       colName: firstCol.name,
@@ -827,8 +871,10 @@ export function SpreadsheetGrid({
 
       const firstRowIdx = 0;
       const lastRowIdx = totalRowCount - 1;
+      const firstRow = getRowAtIndex(0);
 
       setActiveCell({
+        rowId: firstRow?.id,
         rowIdx: firstRowIdx,
         colId: col.id,
         colName: col.name,
@@ -842,7 +888,7 @@ export function SpreadsheetGrid({
         setSelectionFocus({ rowIdx: lastRowIdx, colIdx });
       }
     },
-    [resizingCol, renamingColId, isDraggingCol, commitEdit, totalRowCount, setActiveCell]
+    [resizingCol, renamingColId, isDraggingCol, commitEdit, totalRowCount, getRowAtIndex, setActiveCell]
   );
 
   // Select all cells in sheet when top-left # corner is clicked
@@ -850,8 +896,10 @@ export function SpreadsheetGrid({
     if (sheet.columns.length === 0) return;
     const firstCol = sheet.columns[0];
     const lastRowIdx = totalRowCount - 1;
+    const firstRow = getRowAtIndex(0);
 
     setActiveCell({
+      rowId: firstRow?.id,
       rowIdx: 0,
       colId: firstCol.id,
       colName: firstCol.name,
@@ -859,20 +907,20 @@ export function SpreadsheetGrid({
 
     setSelectionAnchor({ rowIdx: 0, colIdx: 0 });
     setSelectionFocus({ rowIdx: lastRowIdx, colIdx: sheet.columns.length - 1 });
-  }, [sheet.columns, totalRowCount, setActiveCell]);
+  }, [sheet.columns, totalRowCount, getRowAtIndex, setActiveCell]);
 
   // Open dropdown popover
   const handleDropdownClick = useCallback((
     e: React.MouseEvent,
+    row: RowData,
     rowIdx: number,
     colIdx: number,
     col: ColumnDef
   ) => {
     e.stopPropagation();
-    setActiveCell({ rowIdx, colId: col.id, colName: col.name });
+    setActiveCell({ rowId: row.id, rowIdx, colId: col.id, colName: col.name });
     setSelectionAnchor({ rowIdx, colIdx });
     setSelectionFocus({ rowIdx, colIdx });
-    const row = getRowAtIndex(rowIdx);
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const isSource = col.id === "col_lead_source" || col.name.toLowerCase().includes("source");
     const fallbackOptions = isSource ? DEFAULT_LEAD_SOURCES : DEFAULT_FOLLOWUP_OPTIONS;
@@ -884,7 +932,7 @@ export function SpreadsheetGrid({
       left: rect.left,
       options: col.options && col.options.length > 0 ? col.options : fallbackOptions,
     });
-  }, [getRowAtIndex, setActiveCell]);
+  }, [setActiveCell]);
 
   // Row context menu
   const handleRowContextMenu = useCallback(
@@ -1041,7 +1089,9 @@ export function SpreadsheetGrid({
         if (e.shiftKey) {
           if (activeCell.rowIdx > 0) {
             const newRow = activeCell.rowIdx - 1;
+            const targetRow = getRowAtIndex(newRow);
             setActiveCell({
+              rowId: targetRow?.id,
               rowIdx: newRow,
               colId: activeCell.colId,
               colName: activeCell.colName,
@@ -1052,7 +1102,9 @@ export function SpreadsheetGrid({
         } else {
           if (activeCell.rowIdx < maxRowIdx) {
             const newRow = activeCell.rowIdx + 1;
+            const targetRow = getRowAtIndex(newRow);
             setActiveCell({
+              rowId: targetRow?.id,
               rowIdx: newRow,
               colId: activeCell.colId,
               colName: activeCell.colName,
@@ -1072,6 +1124,7 @@ export function SpreadsheetGrid({
           if (currentColIdx > 0) {
             const prevCol = sheet.columns[currentColIdx - 1];
             setActiveCell({
+              rowId: activeCell.rowId,
               rowIdx: activeCell.rowIdx,
               colId: prevCol.id,
               colName: prevCol.name,
@@ -1083,6 +1136,7 @@ export function SpreadsheetGrid({
           if (currentColIdx < maxColIdx) {
             const nextCol = sheet.columns[currentColIdx + 1];
             setActiveCell({
+              rowId: activeCell.rowId,
               rowIdx: activeCell.rowIdx,
               colId: nextCol.id,
               colName: nextCol.name,
@@ -1105,7 +1159,9 @@ export function SpreadsheetGrid({
         } else {
           if (activeCell.rowIdx > 0) {
             const newRow = activeCell.rowIdx - 1;
+            const targetRow = getRowAtIndex(newRow);
             setActiveCell({
+              rowId: targetRow?.id,
               rowIdx: newRow,
               colId: activeCell.colId,
               colName: activeCell.colName,
@@ -1127,7 +1183,9 @@ export function SpreadsheetGrid({
         } else {
           if (activeCell.rowIdx < maxRowIdx) {
             const newRow = activeCell.rowIdx + 1;
+            const targetRow = getRowAtIndex(newRow);
             setActiveCell({
+              rowId: targetRow?.id,
               rowIdx: newRow,
               colId: activeCell.colId,
               colName: activeCell.colName,
@@ -1150,6 +1208,7 @@ export function SpreadsheetGrid({
           if (currentColIdx > 0) {
             const prevCol = sheet.columns[currentColIdx - 1];
             setActiveCell({
+              rowId: activeCell.rowId,
               rowIdx: activeCell.rowIdx,
               colId: prevCol.id,
               colName: prevCol.name,
@@ -1172,6 +1231,7 @@ export function SpreadsheetGrid({
           if (currentColIdx < maxColIdx) {
             const nextCol = sheet.columns[currentColIdx + 1];
             setActiveCell({
+              rowId: activeCell.rowId,
               rowIdx: activeCell.rowIdx,
               colId: nextCol.id,
               colName: nextCol.name,
@@ -1188,7 +1248,8 @@ export function SpreadsheetGrid({
         e.preventDefault();
         const activeColDef = sheet.columns[currentColIdx];
         if (activeColDef && activeColDef.type !== "dropdown") {
-          startEditing(activeCell.rowIdx, activeColDef);
+          const targetRow = getRowAtIndex(activeCell.rowIdx);
+          startEditing(targetRow, activeCell.rowIdx, activeColDef);
         }
         return;
       }
@@ -1474,6 +1535,7 @@ export function SpreadsheetGrid({
   // Context Menu
   const handleContextMenu = (
     e: React.MouseEvent,
+    row: RowData,
     rowIdx: number,
     colIdx: number,
     col: ColumnDef
@@ -1487,12 +1549,11 @@ export function SpreadsheetGrid({
       colIdx <= selectionRange.endCol;
 
     if (!inSel) {
-      setActiveCell({ rowIdx, colId: col.id, colName: col.name });
+      setActiveCell({ rowId: row.id, rowIdx, colId: col.id, colName: col.name });
       setSelectionAnchor({ rowIdx, colIdx });
       setSelectionFocus({ rowIdx, colIdx });
     }
 
-    const row = getRowAtIndex(rowIdx);
     setContextMenu({
       x: e.clientX,
       y: e.clientY,

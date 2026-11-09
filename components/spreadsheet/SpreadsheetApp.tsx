@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAuth } from "../auth/AuthContext";
-import { SheetMeta, SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
+import { SheetMeta, SheetDetail, ColumnDef, RowData, CellStyle, ActiveCell } from "@/lib/types";
 import {
   isValidLead,
   getLeadStatus,
@@ -51,11 +51,7 @@ export function SpreadsheetApp() {
 
   // Search & Navigation
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeCell, setActiveCell] = useState<{
-    rowIdx: number;
-    colId: string;
-    colName: string;
-  } | null>(null);
+  const [activeCell, setActiveCell] = useState<ActiveCell | null>(null);
 
   // Stable refs to prevent stale closure issues during paste and rapid updates across tabs
   const activeSheetRef = useRef<SheetDetail | null>(activeSheet);
@@ -63,7 +59,7 @@ export function SpreadsheetApp() {
     activeSheetRef.current = activeSheet;
   }, [activeSheet]);
 
-  const activeCellRef = useRef<{ rowIdx: number; colId: string; colName: string } | null>(activeCell);
+  const activeCellRef = useRef<ActiveCell | null>(activeCell);
   useEffect(() => {
     activeCellRef.current = activeCell;
   }, [activeCell]);
@@ -124,10 +120,14 @@ export function SpreadsheetApp() {
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [dateFilter, setDateFilter] = useState<string | null>(null);
 
-  // Reset filters when switching sheets
+  // Dynamic filter state
+  const isFiltered = Boolean(dateFilter || statusFilter || searchQuery.trim());
+
+  // Reset filters and active cell when switching sheets
   useEffect(() => {
     setStatusFilter(null);
     setDateFilter(null);
+    setActiveCell(null);
   }, [activeSheetId]);
 
   // Derived state: accurately count all valid leads for the active sheet in real-time (all-time)
@@ -143,6 +143,44 @@ export function SpreadsheetApp() {
       dateFilter,
     });
   }, [activeSheet, dateFilter]);
+
+  // Derived state: filtered rows matching all active filters (date, status, and search query)
+  const currentFilteredRows = useMemo(() => {
+    if (!isFiltered || !activeSheet || !activeSheet.rows) return [];
+    return filterSheetRows(activeSheet.rows, activeSheet.columns, {
+      dateFilter,
+      statusFilter,
+      searchQuery,
+    });
+  }, [activeSheet, isFiltered, dateFilter, statusFilter, searchQuery]);
+
+  // Synchronize activeCell when filters change: keep existing lead selected if still visible, or cleanly select first matching lead
+  useEffect(() => {
+    if (!activeSheet || !isFiltered) return;
+
+    setActiveCell((current) => {
+      if (!current) return null;
+      if (current.rowId && !current.rowId.startsWith("temp_")) {
+        const matchingIndex = currentFilteredRows.findIndex((r) => r.id === current.rowId);
+        if (matchingIndex !== -1) {
+          if (matchingIndex !== current.rowIdx) {
+            return { ...current, rowIdx: matchingIndex };
+          }
+          return current;
+        }
+      }
+      if (currentFilteredRows.length > 0) {
+        const first = currentFilteredRows[0];
+        return {
+          rowId: first.id,
+          rowIdx: 0,
+          colId: current.colId || activeSheet.columns[0]?.id || "",
+          colName: current.colName || activeSheet.columns[0]?.name || "",
+        };
+      }
+      return null;
+    });
+  }, [isFiltered, currentFilteredRows, activeSheet]);
 
   // Real-time displayed lead count: when date filter is active, reflects ONLY leads added on that date!
   const displayedLeadCount = dateFilter ? activeSheetDateFilteredRows.length : activeSheetValidLeadCount;
@@ -449,7 +487,9 @@ export function SpreadsheetApp() {
 
       // Select default cell
       if (data.sheet.columns && data.sheet.columns.length > 0 && data.sheet.rows.length > 0) {
+        const firstRow = data.sheet.rows[0];
         setActiveCell({
+          rowId: firstRow?.id,
           rowIdx: 0,
           colId: data.sheet.columns[0].id,
           colName: data.sheet.columns[0].name,
@@ -542,9 +582,27 @@ export function SpreadsheetApp() {
     return () => clearInterval(interval);
   }, [activeSheetId, savingStatus, handleRefreshFromDB, isDropdownModalOpen]);
 
-  // Get active cell value
+  // Get active cell value - Authoritative single source of truth via stable database row ID
   const getActiveCellValue = (): string => {
     if (!activeSheet || !activeCell) return "";
+
+    // 1. Authoritative lookup by unique database row ID
+    if (activeCell.rowId && !activeCell.rowId.startsWith("temp_")) {
+      const row = activeSheet.rows.find((r) => r.id === activeCell.rowId);
+      if (row) {
+        return row.data[activeCell.colId] || "";
+      }
+    }
+
+    // 2. If filtered, lookup within filtered rows by rendered index
+    if (isFiltered && currentFilteredRows.length > 0) {
+      const row = currentFilteredRows[activeCell.rowIdx];
+      if (row) {
+        return row.data[activeCell.colId] || "";
+      }
+    }
+
+    // 3. Fallback: match by rendered index or sequential order
     const row =
       activeSheet.rows[activeCell.rowIdx] ||
       activeSheet.rows.find(
@@ -554,9 +612,27 @@ export function SpreadsheetApp() {
     return row.data[activeCell.colId] || "";
   };
 
-  // Get active cell style
+  // Get active cell style - Authoritative single source of truth via stable database row ID
   const getActiveCellStyle = (): CellStyle => {
     if (!activeSheet || !activeCell) return {};
+
+    // 1. Authoritative lookup by unique database row ID
+    if (activeCell.rowId && !activeCell.rowId.startsWith("temp_")) {
+      const row = activeSheet.rows.find((r) => r.id === activeCell.rowId);
+      if (row && row.styles) {
+        return row.styles[activeCell.colId] || {};
+      }
+    }
+
+    // 2. If filtered, lookup within filtered rows by rendered index
+    if (isFiltered && currentFilteredRows.length > 0) {
+      const row = currentFilteredRows[activeCell.rowIdx];
+      if (row && row.styles) {
+        return row.styles[activeCell.colId] || {};
+      }
+    }
+
+    // 3. Fallback
     const row =
       activeSheet.rows[activeCell.rowIdx] ||
       activeSheet.rows.find(
@@ -865,7 +941,18 @@ export function SpreadsheetApp() {
   const handleApplyStyle = async (newStyle: Partial<CellStyle>) => {
     if (!activeSheet || !activeCell) return;
     pushUndoSnapshot();
-    const row = activeSheet.rows[activeCell.rowIdx];
+
+    const row =
+      (activeCell.rowId && !activeCell.rowId.startsWith("temp_")
+        ? activeSheet.rows.find((r) => r.id === activeCell.rowId)
+        : null) ||
+      (isFiltered && currentFilteredRows.length > 0
+        ? currentFilteredRows[activeCell.rowIdx]
+        : null) ||
+      activeSheet.rows[activeCell.rowIdx] ||
+      activeSheet.rows.find(
+        (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
+      );
     if (!row) return;
 
     const currentStyle = (row.styles && row.styles[activeCell.colId]) || {};
@@ -1425,6 +1512,48 @@ export function SpreadsheetApp() {
     }
   };
 
+  // Consistency Diagnostics & Self-Healing (Phase 7)
+  useEffect(() => {
+    if (!activeSheet || !activeCell) return;
+
+    // Resolve target row via activeCell.rowId or filtered position
+    const targetRow =
+      (activeCell.rowId && !activeCell.rowId.startsWith("temp_")
+        ? activeSheet.rows.find((r) => r.id === activeCell.rowId)
+        : null) ||
+      (isFiltered && currentFilteredRows.length > 0
+        ? currentFilteredRows[activeCell.rowIdx]
+        : null) ||
+      activeSheet.rows[activeCell.rowIdx];
+
+    if (!targetRow) return;
+
+    const cellVal = targetRow.data?.[activeCell.colId] ?? "";
+    const formulaVal = getActiveCellValue();
+
+    if (cellVal !== formulaVal) {
+      console.error(
+        `[DATA MISMATCH] Cell value '${cellVal}' does not match state value '${formulaVal}' for lead ${activeCell.rowId}, column ${activeCell.colId}. Triggering self-heal sync.`
+      );
+      // Self-healing: ensure activeCell accurately carries the authoritative row ID
+      if (targetRow.id && targetRow.id !== activeCell.rowId) {
+        setActiveCell((prev) => (prev ? { ...prev, rowId: targetRow.id } : prev));
+      }
+    } else {
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[DATA CONSISTENCY OK]", {
+          renderedRow: activeCell.rowIdx,
+          rowId: targetRow.id,
+          colId: activeCell.colId,
+          colName: activeCell.colName,
+          cellVal,
+          formulaVal,
+          status: "MATCH",
+        });
+      }
+    }
+  }, [activeCell, activeSheet, isFiltered, currentFilteredRows]);
+
   if (loadingSheets) {
     return (
       <div className="h-screen w-screen flex flex-col items-center justify-center bg-slate-900 text-white gap-3">
@@ -1498,15 +1627,24 @@ export function SpreadsheetApp() {
           onCellValueChange={(val) => {
             if (activeSheet && activeCell) {
               const row =
+                (activeCell.rowId && !activeCell.rowId.startsWith("temp_")
+                  ? activeSheet.rows.find((r) => r.id === activeCell.rowId)
+                  : null) ||
+                (isFiltered && currentFilteredRows.length > 0
+                  ? currentFilteredRows[activeCell.rowIdx]
+                  : null) ||
                 activeSheet.rows[activeCell.rowIdx] ||
                 activeSheet.rows.find(
                   (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
                 );
+
+              const rowId = row?.id || activeCell.rowId || `temp_${activeCell.rowIdx}`;
+              const rowOrder = row?.order !== undefined ? row.order : activeCell.rowIdx;
               handleUpdateCell(
-                row ? row.id : `temp_${activeCell.rowIdx}`,
+                rowId,
                 activeCell.colId,
                 val,
-                activeCell.rowIdx
+                rowOrder
               );
             }
           }}

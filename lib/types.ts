@@ -16,6 +16,13 @@ export interface CellStyle {
   align?: "left" | "center" | "right";
 }
 
+export interface ActiveCell {
+  rowId?: string;      // Stable database ID of the lead (or temp_${order} for blank rows)
+  rowIdx: number;     // Rendered row index
+  colId: string;      // Column field key (e.g. col_number, col_name)
+  colName: string;    // Column display name
+}
+
 export interface RowData {
   id: string;
   sheetId: string;

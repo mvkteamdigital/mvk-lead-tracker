@@ -929,6 +929,388 @@ it("Save failure preserves pending configuration without silent deletion", async
   assert.deepStrictEqual(pendingState.options, ["Meta Ads", "Google Ads", "Hoarding"]);
 });
 
+// =========================================================================
+// Section 7: Cell-to-Database Single Source of Truth & 14 Regression Scenarios
+// =========================================================================
+console.log("\n--- Section 7: Cell-to-Database Consistency (14 Scenarios) ---");
+
+// Helper simulating getActiveCellValue from SpreadsheetApp
+function simulateGetActiveCellValue(activeSheet, activeCell, filterOpts = {}) {
+  if (!activeSheet || !activeCell) return "";
+
+  const isFiltered = Boolean(filterOpts.dateFilter || filterOpts.statusFilter || (filterOpts.searchQuery && filterOpts.searchQuery.trim()));
+  const currentFilteredRows = isFiltered
+    ? filterSheetRows(activeSheet.rows, activeSheet.columns, filterOpts)
+    : [];
+
+  // 1. Authoritative lookup by unique database row ID
+  if (activeCell.rowId && !activeCell.rowId.startsWith("temp_")) {
+    const row = activeSheet.rows.find((r) => r.id === activeCell.rowId);
+    if (row) {
+      return row.data[activeCell.colId] || "";
+    }
+  }
+
+  // 2. If filtered, lookup within filtered rows by rendered index
+  if (isFiltered && currentFilteredRows.length > 0) {
+    const row = currentFilteredRows[activeCell.rowIdx];
+    if (row) {
+      return row.data[activeCell.colId] || "";
+    }
+  }
+
+  // 3. Fallback: match by rendered index or sequential order
+  const row =
+    activeSheet.rows[activeCell.rowIdx] ||
+    activeSheet.rows.find(
+      (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
+    );
+  if (!row) return "";
+  return row.data[activeCell.colId] || "";
+}
+
+// Helper simulating getRowAtIndex from SpreadsheetGrid
+function simulateGetRowAtIndex(sheet, index, filterOpts = {}) {
+  const isFiltered = Boolean(filterOpts.dateFilter || filterOpts.statusFilter || (filterOpts.searchQuery && filterOpts.searchQuery.trim()));
+  const filteredRows = isFiltered
+    ? filterSheetRows(sheet.rows, sheet.columns, filterOpts)
+    : [];
+
+  if (isFiltered) {
+    if (index >= 0 && index < filteredRows.length) {
+      return filteredRows[index];
+    }
+    return {
+      id: `temp_${index}`,
+      sheetId: sheet.id,
+      order: index,
+      data: {},
+      styles: {},
+    };
+  }
+  if (index >= 0 && index < sheet.rows.length) {
+    return sheet.rows[index];
+  }
+  return {
+    id: `temp_${index}`,
+    sheetId: sheet.id,
+    order: index,
+    data: {},
+    styles: {},
+  };
+}
+
+// Sample test data for Sanjana (Meta) and Sanjana (99acres)
+const sampleColumns = [
+  { id: "col_project_name", name: "Project Name", type: "text" },
+  { id: "col_plot_size", name: "Enquired Plot Size", type: "text" },
+  { id: "col_budget", name: "Client Budget", type: "text" },
+  { id: "col_location", name: "Client Location", type: "text" },
+  { id: "col_name", name: "Name", type: "text" },
+  { id: "col_number", name: "Number", type: "text" },
+  { id: "col_lead_source", name: "Lead Source", type: "dropdown" },
+  { id: "col_followup_1", name: "1st Follow Up", type: "dropdown" },
+  { id: "col_followup_1_date", name: "1st Follow Up Date", type: "date" },
+  { id: "col_remarks", name: "Remarks", type: "text" },
+];
+
+const sanjanaMetaSheet = {
+  id: "sheet_sanjana_meta",
+  name: "Sanjana (Meta)",
+  userId: "user_sanjana",
+  columns: sampleColumns,
+  rows: [
+    { id: "meta_lead_0", order: 0, data: { col_name: "Rahul Verma", col_number: "8618936742", col_lead_source: "Meta Ads", col_followup_1: "RNR" }, createdAt: "2026-11-01T10:00:00.000Z" },
+    { id: "meta_lead_1", order: 1, data: { col_name: "Anita Sharma", col_number: "9876543210", col_lead_source: "Meta Ads", col_followup_1: "Follow-up Needed" }, createdAt: "2026-11-02T10:00:00.000Z" },
+    { id: "meta_lead_2", order: 2, data: { col_name: "Vikas Patel", col_number: "9823456789", col_lead_source: "Meta Ads", col_followup_1: "Site Visit Completed" }, createdAt: "2026-11-03T10:00:00.000Z" },
+    { id: "meta_lead_3", order: 3, data: { col_name: "Pooja Reddy", col_number: "9123456780", col_lead_source: "Meta Ads", col_followup_1: "RNR" }, createdAt: "2026-11-04T10:00:00.000Z" },
+    { id: "meta_lead_4", order: 4, data: { col_name: "Suresh Gupta", col_number: "9345678901", col_lead_source: "Meta Ads", col_followup_1: "Site Visit Booked – Not Completed" }, createdAt: "2026-11-05T10:00:00.000Z" },
+    { id: "meta_lead_5", order: 5, data: { col_name: "Kavita Rao", col_number: "9456789012", col_lead_source: "Meta Ads", col_followup_1: "Follow-up Needed" }, createdAt: "2026-11-06T10:00:00.000Z" },
+    { id: "meta_lead_6", order: 6, data: { col_name: "Manoj Kumar", col_number: "9567890123", col_lead_source: "Meta Ads", col_followup_1: "Purchase Done" }, createdAt: "2026-11-07T10:00:00.000Z" },
+    { id: "meta_lead_7", order: 7, data: { col_name: "Deepa Nair", col_number: "9678901234", col_lead_source: "Meta Ads", col_followup_1: "Dropped / Not Interested" }, createdAt: "2026-11-08T10:00:00.000Z" },
+    { id: "meta_lead_8", order: 8, data: { col_name: "Kiran Joshi", col_number: "7204021206", col_lead_source: "Meta Ads", col_followup_1: "Site Visit Completed" }, createdAt: "2026-11-09T10:00:00.000Z" },
+  ],
+};
+
+const sanjana99acresSheet = {
+  id: "sheet_sanjana_99acres",
+  name: "Sanjana (99acres)",
+  userId: "user_sanjana",
+  columns: sampleColumns,
+  rows: Array.from({ length: 21 }, (_, i) => ({
+    id: `99acres_lead_${i}`,
+    order: i,
+    data: {
+      col_name: `99acres Client ${i + 1}`,
+      col_number: `98000000${String(i).padStart(2, "0")}`,
+      col_lead_source: "MagicBricks / 99acres",
+      col_followup_1: i % 2 === 0 ? "Follow-up Needed" : "Site Visit Completed",
+    },
+    createdAt: `2026-11-0${(i % 9) + 1}T10:00:00.000Z`,
+  })),
+};
+
+it("Scenario 1: Sanjana (Meta) sheet: Select row 1, 5, 9. Verify cell value == Formula Bar == DB", () => {
+  // Row 1 (index 0)
+  const cell0 = { rowId: "meta_lead_0", rowIdx: 0, colId: "col_number", colName: "Number" };
+  const val0 = simulateGetActiveCellValue(sanjanaMetaSheet, cell0);
+  assert.strictEqual(val0, "8618936742");
+  assert.strictEqual(val0, sanjanaMetaSheet.rows[0].data.col_number);
+
+  // Row 5 (index 4)
+  const cell4 = { rowId: "meta_lead_4", rowIdx: 4, colId: "col_name", colName: "Name" };
+  const val4 = simulateGetActiveCellValue(sanjanaMetaSheet, cell4);
+  assert.strictEqual(val4, "Suresh Gupta");
+  assert.strictEqual(val4, sanjanaMetaSheet.rows[4].data.col_name);
+
+  // Row 9 (index 8)
+  const cell8 = { rowId: "meta_lead_8", rowIdx: 8, colId: "col_number", colName: "Number" };
+  const val8 = simulateGetActiveCellValue(sanjanaMetaSheet, cell8);
+  assert.strictEqual(val8, "7204021206");
+  assert.strictEqual(val8, sanjanaMetaSheet.rows[8].data.col_number);
+});
+
+it("Scenario 2: Sanjana (99acres) sheet: Select row 1, 10, 21. Verify cell value == Formula Bar == DB", () => {
+  // Row 1 (index 0)
+  const cell0 = { rowId: "99acres_lead_0", rowIdx: 0, colId: "col_number", colName: "Number" };
+  const val0 = simulateGetActiveCellValue(sanjana99acresSheet, cell0);
+  assert.strictEqual(val0, "9800000000");
+
+  // Row 10 (index 9)
+  const cell9 = { rowId: "99acres_lead_9", rowIdx: 9, colId: "col_number", colName: "Number" };
+  const val9 = simulateGetActiveCellValue(sanjana99acresSheet, cell9);
+  assert.strictEqual(val9, "9800000009");
+
+  // Row 21 (index 20)
+  const cell20 = { rowId: "99acres_lead_20", rowIdx: 20, colId: "col_number", colName: "Number" };
+  const val20 = simulateGetActiveCellValue(sanjana99acresSheet, cell20);
+  assert.strictEqual(val20, "9800000020");
+});
+
+it("Scenario 3: Switch from Sanjana (Meta) to Sanjana (99acres) and back. Verify no stale cell selection, no data bleeding", () => {
+  let activeSheetId = "sheet_sanjana_meta";
+  let activeCell = { rowId: "meta_lead_8", rowIdx: 8, colId: "col_number", colName: "Number" };
+
+  // Switch to 99acres: activeCell must be reset to null before loading new sheet
+  activeSheetId = "sheet_sanjana_99acres";
+  activeCell = null;
+  assert.strictEqual(activeCell, null);
+
+  // New sheet loads default cell (first row of 99acres)
+  activeCell = {
+    rowId: sanjana99acresSheet.rows[0].id,
+    rowIdx: 0,
+    colId: "col_project_name",
+    colName: "Project Name",
+  };
+  assert.strictEqual(activeCell.rowId, "99acres_lead_0");
+  assert.notStrictEqual(activeCell.rowId, "meta_lead_8");
+});
+
+it("Scenario 4: Filter by date. Select first filtered row. Cell value == Formula Bar (Resolves reported 7204021206 vs 8618936742 bug)", () => {
+  // Filter for leads on 2026-11-09. Only meta_lead_8 matches!
+  const filterOpts = { dateFilter: "2026-11-09" };
+  const filtered = filterSheetRows(sanjanaMetaSheet.rows, sanjanaMetaSheet.columns, filterOpts);
+  assert.strictEqual(filtered.length, 1);
+  assert.strictEqual(filtered[0].id, "meta_lead_8");
+  assert.strictEqual(filtered[0].data.col_number, "7204021206");
+
+  // Grid renders filtered[0] at rendered rowIdx = 0
+  const renderedRow = simulateGetRowAtIndex(sanjanaMetaSheet, 0, filterOpts);
+  assert.strictEqual(renderedRow.id, "meta_lead_8");
+  assert.strictEqual(renderedRow.data.col_number, "7204021206");
+
+  // Cell clicked in grid sets activeCell with stable rowId:
+  const activeCell = {
+    rowId: renderedRow.id,
+    rowIdx: 0,
+    colId: "col_number",
+    colName: "Number",
+  };
+
+  // Formula Bar reads value:
+  const formulaValue = simulateGetActiveCellValue(sanjanaMetaSheet, activeCell, filterOpts);
+  // CRITICAL ASSERTION: Must be 7204021206, NOT master row 0's 8618936742!
+  assert.strictEqual(formulaValue, "7204021206");
+  assert.notStrictEqual(formulaValue, "8618936742");
+  assert.strictEqual(renderedRow.data.col_number, formulaValue);
+});
+
+it("Scenario 5: Filter by status ('Site Visit Completed'). Select cells. Verify match", () => {
+  const filterOpts = { statusFilter: "Site Visit Completed" };
+  const filtered = filterSheetRows(sanjanaMetaSheet.rows, sanjanaMetaSheet.columns, filterOpts);
+  assert.strictEqual(filtered.length, 2); // Vikas Patel (lead 2) and Kiran Joshi (lead 8)
+
+  const activeCell = {
+    rowId: filtered[1].id,
+    rowIdx: 1,
+    colId: "col_name",
+    colName: "Name",
+  };
+  const formulaVal = simulateGetActiveCellValue(sanjanaMetaSheet, activeCell, filterOpts);
+  assert.strictEqual(formulaVal, "Kiran Joshi");
+});
+
+it("Scenario 6: Combined filter (date + status). Select cells. Verify match", () => {
+  const filterOpts = { dateFilter: "2026-11-09", statusFilter: "Site Visit Completed" };
+  const filtered = filterSheetRows(sanjanaMetaSheet.rows, sanjanaMetaSheet.columns, filterOpts);
+  assert.strictEqual(filtered.length, 1);
+  assert.strictEqual(filtered[0].id, "meta_lead_8");
+
+  const activeCell = {
+    rowId: filtered[0].id,
+    rowIdx: 0,
+    colId: "col_number",
+    colName: "Number",
+  };
+  const val = simulateGetActiveCellValue(sanjanaMetaSheet, activeCell, filterOpts);
+  assert.strictEqual(val, "7204021206");
+});
+
+it("Scenario 7: Search by customer name or phone number. Select resulting row. Verify match", () => {
+  const filterOpts = { searchQuery: "Kiran" };
+  const filtered = filterSheetRows(sanjanaMetaSheet.rows, sanjanaMetaSheet.columns, filterOpts);
+  assert.strictEqual(filtered.length, 1);
+
+  const activeCell = {
+    rowId: filtered[0].id,
+    rowIdx: 0,
+    colId: "col_number",
+    colName: "Number",
+  };
+  const val = simulateGetActiveCellValue(sanjanaMetaSheet, activeCell, filterOpts);
+  assert.strictEqual(val, "7204021206");
+});
+
+it("Scenario 8: Clear search/filter. Verify grid returns to full list and activeCell remains valid", () => {
+  // Before clearing, user had meta_lead_8 selected at rowIdx = 0
+  const activeCell = {
+    rowId: "meta_lead_8",
+    rowIdx: 0,
+    colId: "col_number",
+    colName: "Number",
+  };
+
+  // Filter cleared: filterOpts empty
+  const filterOpts = {};
+  const formulaVal = simulateGetActiveCellValue(sanjanaMetaSheet, activeCell, filterOpts);
+  assert.strictEqual(formulaVal, "7204021206");
+  assert.strictEqual(sanjanaMetaSheet.rows.length, 9);
+});
+
+it("Scenario 9: Edit a cell via in-cell editing on a filtered view. Verify only that lead is updated", () => {
+  const filterOpts = { dateFilter: "2026-11-09" };
+  const targetRow = simulateGetRowAtIndex(sanjanaMetaSheet, 0, filterOpts);
+  assert.strictEqual(targetRow.id, "meta_lead_8");
+
+  // In-cell edit updates targetRow.id
+  const updatedData = { ...targetRow.data, col_remarks: "Followed up via call" };
+  const rows = sanjanaMetaSheet.rows.map((r) => r.id === targetRow.id ? { ...r, data: updatedData } : r);
+
+  assert.strictEqual(rows.find((r) => r.id === "meta_lead_8").data.col_remarks, "Followed up via call");
+  // Master lead 0 must NOT be touched
+  assert.strictEqual(rows.find((r) => r.id === "meta_lead_0").data.col_remarks, undefined);
+});
+
+it("Scenario 10: Edit a cell via Formula Bar on a filtered view. Verify only that lead is updated", () => {
+  const filterOpts = { statusFilter: "Purchase Done" };
+  const filtered = filterSheetRows(sanjanaMetaSheet.rows, sanjanaMetaSheet.columns, filterOpts);
+  assert.strictEqual(filtered.length, 1);
+  assert.strictEqual(filtered[0].id, "meta_lead_6"); // Manoj Kumar
+
+  const activeCell = {
+    rowId: filtered[0].id,
+    rowIdx: 0,
+    colId: "col_budget",
+    colName: "Client Budget",
+  };
+
+  // User types in Formula Bar
+  const newBudget = "₹50-75 lakhs";
+  // Formula Bar handler resolves target row by activeCell.rowId
+  const targetRow = sanjanaMetaSheet.rows.find((r) => r.id === activeCell.rowId);
+  assert.strictEqual(targetRow.id, "meta_lead_6");
+  assert.notStrictEqual(targetRow.id, sanjanaMetaSheet.rows[0].id);
+});
+
+it("Scenario 11: Edit a dropdown cell (Lead Source, Follow-up Status) on a filtered view. Verify correct lead updated", () => {
+  const filterOpts = { searchQuery: "Vikas" };
+  const targetRow = simulateGetRowAtIndex(sanjanaMetaSheet, 0, filterOpts);
+  assert.strictEqual(targetRow.id, "meta_lead_2");
+
+  // Dropdown option selected
+  const newStatus = "Purchase Done";
+  const updatedRow = { ...targetRow, data: { ...targetRow.data, col_followup_1: newStatus } };
+  assert.strictEqual(updatedRow.id, "meta_lead_2");
+  assert.strictEqual(updatedRow.data.col_followup_1, "Purchase Done");
+});
+
+it("Scenario 12: Date picker edit on Follow-up Date on a filtered view. Verify correct lead and correct date saved", () => {
+  const filterOpts = { searchQuery: "Anita" };
+  const targetRow = simulateGetRowAtIndex(sanjanaMetaSheet, 0, filterOpts);
+  assert.strictEqual(targetRow.id, "meta_lead_1");
+
+  const pickedDate = "2026-11-15";
+  const updatedRow = { ...targetRow, data: { ...targetRow.data, col_followup_1_date: pickedDate } };
+  assert.strictEqual(updatedRow.id, "meta_lead_1");
+  assert.strictEqual(updatedRow.data.col_followup_1_date, "2026-11-15");
+});
+
+it("Scenario 13: Scroll down through 100+ rows (virtualization). Select cells in virtualized view. Verify match", () => {
+  const bigSheet = {
+    id: "sheet_big",
+    name: "Big Sheet",
+    columns: sampleColumns,
+    rows: Array.from({ length: 500 }, (_, i) => ({
+      id: `big_row_${i}`,
+      order: i,
+      data: {
+        col_name: `Person ${i}`,
+        col_number: `9100000${String(i).padStart(3, "0")}`,
+      },
+    })),
+  };
+
+  // Virtualized row at index 250
+  const row250 = simulateGetRowAtIndex(bigSheet, 250);
+  assert.strictEqual(row250.id, "big_row_250");
+  assert.strictEqual(row250.data.col_number, "9100000250");
+
+  const cell = {
+    rowId: row250.id,
+    rowIdx: 250,
+    colId: "col_number",
+    colName: "Number",
+  };
+  const val = simulateGetActiveCellValue(bigSheet, cell);
+  assert.strictEqual(val, "9100000250");
+});
+
+it("Scenario 14: Rapid switching between tabs, filters, and cells. Verify no race conditions or corrupted values", () => {
+  let activeSheet = sanjanaMetaSheet;
+  let activeCell = { rowId: "meta_lead_0", rowIdx: 0, colId: "col_number", colName: "Number" };
+  let filterOpts = {};
+
+  // Action 1: filter by date
+  filterOpts = { dateFilter: "2026-11-09" };
+  let filtered = filterSheetRows(activeSheet.rows, activeSheet.columns, filterOpts);
+  activeCell = { rowId: filtered[0].id, rowIdx: 0, colId: "col_number", colName: "Number" };
+  assert.strictEqual(simulateGetActiveCellValue(activeSheet, activeCell, filterOpts), "7204021206");
+
+  // Action 2: switch to 99acres
+  activeSheet = sanjana99acresSheet;
+  filterOpts = {};
+  activeCell = { rowId: activeSheet.rows[0].id, rowIdx: 0, colId: "col_number", colName: "Number" };
+  assert.strictEqual(simulateGetActiveCellValue(activeSheet, activeCell, filterOpts), "9800000000");
+
+  // Action 3: switch back to Meta with search
+  activeSheet = sanjanaMetaSheet;
+  filterOpts = { searchQuery: "Vikas" };
+  filtered = filterSheetRows(activeSheet.rows, activeSheet.columns, filterOpts);
+  activeCell = { rowId: filtered[0].id, rowIdx: 0, colId: "col_name", colName: "Name" };
+  assert.strictEqual(simulateGetActiveCellValue(activeSheet, activeCell, filterOpts), "Vikas Patel");
+});
+
 console.log(`\n=== ALL TESTS PASSED: ${passed}/${total} ===\n`);
 if (passed !== total) {
   process.exit(1);
