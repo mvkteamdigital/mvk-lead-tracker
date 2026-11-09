@@ -13,7 +13,7 @@ import {
   formatDateDisplay,
   filterSheetRows,
 } from "@/lib/leads";
-import { SOURCE_COLORS, STATUS_COLORS, DEFAULT_FOLLOWUP_OPTIONS } from "@/lib/defaults";
+import { SOURCE_COLORS, STATUS_COLORS, DEFAULT_FOLLOWUP_OPTIONS, getSourceColor } from "@/lib/defaults";
 import {
   Phone,
   ChevronRight,
@@ -72,7 +72,7 @@ const MobileLeadCard = ({
     null;
 
   const leadSource = getLeadSource(lead.data);
-  const sourceStyle = leadSource ? SOURCE_COLORS[leadSource] : null;
+  const sourceStyle = leadSource ? getSourceColor(leadSource) : null;
   const addedDate = formatAddedDate(lead.createdAt);
 
   // Status tracking: synchronously derived from lead data and column definitions

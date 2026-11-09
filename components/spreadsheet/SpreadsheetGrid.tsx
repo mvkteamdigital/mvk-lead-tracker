@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { SheetDetail, ColumnDef, RowData, CellStyle } from "@/lib/types";
-import { STATUS_COLORS, SOURCE_COLORS } from "@/lib/defaults";
+import { STATUS_COLORS, SOURCE_COLORS, getSourceColor, DEFAULT_LEAD_SOURCES, DEFAULT_FOLLOWUP_OPTIONS } from "@/lib/defaults";
 import {
   rowMatchesStatusFilter,
   rowMatchesDateFilter,
@@ -189,11 +189,11 @@ const GridCell = ({
           {value ? (
             <span
               className={`px-2.5 py-0.5 rounded-full text-[11px] font-medium border flex items-center gap-1.5 truncate shadow-2xs select-none ${
-                (col.id === "col_lead_source" ? SOURCE_COLORS[value] : STATUS_COLORS[value])?.bg || "bg-slate-100"
+                (col.id === "col_lead_source" ? getSourceColor(value) : STATUS_COLORS[value])?.bg || "bg-slate-100"
               } ${
-                (col.id === "col_lead_source" ? SOURCE_COLORS[value] : STATUS_COLORS[value])?.text || "text-slate-900"
+                (col.id === "col_lead_source" ? getSourceColor(value) : STATUS_COLORS[value])?.text || "text-slate-900"
               } ${
-                (col.id === "col_lead_source" ? SOURCE_COLORS[value] : STATUS_COLORS[value])?.border || "border-slate-300"
+                (col.id === "col_lead_source" ? getSourceColor(value) : STATUS_COLORS[value])?.border || "border-slate-300"
               }`}
             >
               <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80" />
@@ -874,13 +874,15 @@ export function SpreadsheetGrid({
     setSelectionFocus({ rowIdx, colIdx });
     const row = getRowAtIndex(rowIdx);
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const isSource = col.id === "col_lead_source" || col.name.toLowerCase().includes("source");
+    const fallbackOptions = isSource ? DEFAULT_LEAD_SOURCES : DEFAULT_FOLLOWUP_OPTIONS;
     setOpenDropdown({
       rowId: row.id,
       colId: col.id,
       rowIdx,
       top: rect.bottom + 2,
       left: rect.left,
-      options: col.options || [],
+      options: col.options && col.options.length > 0 ? col.options : fallbackOptions,
     });
   }, [getRowAtIndex, setActiveCell]);
 
@@ -1862,7 +1864,7 @@ export function SpreadsheetGrid({
           {openDropdown.options.map((opt) => {
             const colors =
               openDropdown.colId === "col_lead_source"
-                ? SOURCE_COLORS[opt]
+                ? getSourceColor(opt)
                 : STATUS_COLORS[opt];
             return (
               <button

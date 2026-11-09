@@ -1,20 +1,36 @@
 "use client";
 
-import React, { useRef } from "react";
-import { STATUS_COLORS, HARDCODED_STATUS_FILTERS } from "@/lib/defaults";
+import React, { useRef, useState, useEffect } from "react";
+import {
+  STATUS_COLORS,
+  getSourceColor,
+  DEFAULT_FOLLOWUP_OPTIONS,
+  DEFAULT_LEAD_SOURCES,
+  DEFAULT_STATUS_FILTER_VISIBILITY,
+  DEFAULT_SOURCE_FILTER_VISIBILITY,
+} from "@/lib/defaults";
 import { formatDateDisplay, toLocalYMD } from "@/lib/leads";
-import { Users, X, ChevronLeft, ChevronRight, Settings2, Calendar } from "lucide-react";
+import {
+  Users,
+  X,
+  ChevronLeft,
+  ChevronRight,
+  Settings2,
+  Calendar,
+  Sparkles,
+  Filter,
+  ChevronDown,
+} from "lucide-react";
 
 interface StatusFilterBarProps {
   totalLeads: number;
   statusCounts: Record<string, number>;
   activeFilter: string | null;
-  onSelectFilter: (status: string | null) => void;
+  onSelectFilter: (filter: string | null) => void;
   dateFilter?: string | null;
   onSelectDate?: (date: string | null) => void;
   allTimeTotalLeads?: number;
   onOpenDropdownModal?: () => void;
-  // Optional for backwards compatibility
   availableStatuses?: string[];
   statusFilterVisibility?: Record<string, boolean>;
   availableSources?: string[];
@@ -22,7 +38,7 @@ interface StatusFilterBarProps {
 }
 
 // Fallback color palettes for custom or non-standard statuses if ever needed
-const FALLBACK_PALETTES = [
+const FALLBACK_STATUS_PALETTES = [
   { bg: "bg-cyan-50", text: "text-cyan-800 font-medium", border: "border-cyan-300" },
   { bg: "bg-teal-50", text: "text-teal-800 font-medium", border: "border-teal-300" },
   { bg: "bg-violet-50", text: "text-violet-800 font-medium", border: "border-violet-300" },
@@ -39,9 +55,27 @@ export function StatusFilterBar({
   dateFilter = null,
   onSelectDate,
   onOpenDropdownModal,
+  availableStatuses,
+  statusFilterVisibility,
+  availableSources,
+  sourceFilterVisibility,
 }: StatusFilterBarProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const mobileDateInputRef = useRef<HTMLInputElement>(null);
+  const moreFiltersRef = useRef<HTMLDivElement>(null);
+
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
+
+  // Close "More Filters" dropdown popover on click outside
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (moreFiltersRef.current && !moreFiltersRef.current.contains(e.target as Node)) {
+        setShowMoreFilters(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
 
   const scroll = (direction: "left" | "right") => {
     if (scrollRef.current) {
@@ -54,14 +88,45 @@ export function StatusFilterBar({
     if (STATUS_COLORS[status]) return STATUS_COLORS[status];
     const normalized = status.replace(/[–—]/g, "-");
     if (STATUS_COLORS[normalized]) return STATUS_COLORS[normalized];
-    return FALLBACK_PALETTES[index % FALLBACK_PALETTES.length];
+    return FALLBACK_STATUS_PALETTES[index % FALLBACK_STATUS_PALETTES.length];
   };
 
   const unattendedCount = statusCounts["Unattended"] || 0;
 
+  // Resolve statuses and their filter bar visibility
+  const statuses =
+    availableStatuses && availableStatuses.length > 0
+      ? availableStatuses
+      : DEFAULT_FOLLOWUP_OPTIONS;
+  const statusVis = statusFilterVisibility || DEFAULT_STATUS_FILTER_VISIBILITY;
+  const visibleStatuses = statuses.filter((st) => statusVis[st] !== false);
+  const hiddenStatuses = statuses.filter((st) => statusVis[st] === false);
+
+  // Resolve lead sources and their filter bar visibility
+  const sources =
+    availableSources && availableSources.length > 0
+      ? availableSources
+      : DEFAULT_LEAD_SOURCES;
+  const sourceVis = sourceFilterVisibility || DEFAULT_SOURCE_FILTER_VISIBILITY;
+  const visibleSources = sources.filter((src) => sourceVis[src] === true);
+  const hiddenSources = sources.filter((src) => sourceVis[src] === false);
+
+  const hasMoreFilters = hiddenSources.length > 0 || hiddenStatuses.length > 0;
+  const isMoreFilterActive = Boolean(
+    activeFilter &&
+      (hiddenSources.some(
+        (src) => src.toLowerCase() === activeFilter.toLowerCase()
+      ) ||
+        hiddenStatuses.some(
+          (st) =>
+            st.toLowerCase() === activeFilter.toLowerCase() ||
+            st.replace(/[–—]/g, "-").toLowerCase() ===
+              activeFilter.replace(/[–—]/g, "-").toLowerCase()
+        ))
+  );
+
   return (
     <div className="bg-white border-b border-slate-200 px-3 sm:px-4 py-2 flex items-center gap-2 select-none shadow-2xs shrink-0 z-20 overflow-x-auto no-scrollbar">
-      
       {/* 1. Date Added Filter Input (Desktop: Full text-based date picker) */}
       <div
         className={`hidden md:flex items-center gap-1.5 shrink-0 rounded-xl px-2.5 py-1 text-xs border transition-all ${
@@ -70,8 +135,15 @@ export function StatusFilterBar({
             : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-700"
         }`}
       >
-        <Calendar className={`h-3.5 w-3.5 ${dateFilter ? "text-amber-600" : "text-slate-400"} shrink-0`} />
-        <label htmlFor="filter-date-added-desktop" className="text-[11px] font-bold text-slate-700 whitespace-nowrap cursor-pointer">
+        <Calendar
+          className={`h-3.5 w-3.5 ${
+            dateFilter ? "text-amber-600" : "text-slate-400"
+          } shrink-0`}
+        />
+        <label
+          htmlFor="filter-date-added-desktop"
+          className="text-[11px] font-bold text-slate-700 whitespace-nowrap cursor-pointer"
+        >
           Date Added:
         </label>
         <input
@@ -123,10 +195,18 @@ export function StatusFilterBar({
                 ? "bg-amber-100 border-amber-400 text-amber-900 ring-2 ring-amber-400/50 shadow-xs"
                 : "bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-600 active:bg-slate-200"
             }`}
-            title={dateFilter ? `Filtered on ${formatDateDisplay(dateFilter)} (tap to change)` : "Filter by date added"}
+            title={
+              dateFilter
+                ? `Filtered on ${formatDateDisplay(dateFilter)} (tap to change)`
+                : "Filter by date added"
+            }
             aria-label="Filter by date added"
           >
-            <Calendar className={`h-4 w-4 ${dateFilter ? "text-amber-700" : "text-slate-600"}`} />
+            <Calendar
+              className={`h-4 w-4 ${
+                dateFilter ? "text-amber-700" : "text-slate-600"
+              }`}
+            />
             {dateFilter && (
               <span className="absolute -top-0.5 -right-0.5 h-2 w-2 bg-amber-500 rounded-full ring-2 ring-white" />
             )}
@@ -182,7 +262,9 @@ export function StatusFilterBar({
           }`}
           title={
             dateFilter
-              ? `Showing ${totalLeads} leads added on ${formatDateDisplay(dateFilter)}`
+              ? `Showing ${totalLeads} leads added on ${formatDateDisplay(
+                  dateFilter
+                )}`
               : "Show all leads"
           }
         >
@@ -204,15 +286,23 @@ export function StatusFilterBar({
         {/* 3. Permanent Fixed Element: Unattended Leads Filter Chip */}
         <button
           type="button"
-          onClick={() => onSelectFilter(activeFilter === "Unattended" ? null : "Unattended")}
+          onClick={() =>
+            onSelectFilter(activeFilter === "Unattended" ? null : "Unattended")
+          }
           className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 shrink-0 border cursor-pointer ${
             activeFilter === "Unattended"
               ? "ring-2 ring-rose-500 bg-rose-100 text-rose-950 border-rose-400 font-bold shadow-xs"
               : "bg-rose-50/90 hover:bg-rose-100 text-rose-800 border-rose-300 hover:border-rose-400"
           }`}
-          title={`Filter by Unattended Leads (All 4 follow-ups empty: ${unattendedCount} leads${dateFilter ? ` on ${formatDateDisplay(dateFilter)}` : ""})`}
+          title={`Filter by Unattended Leads (All 4 follow-ups empty: ${unattendedCount} leads${
+            dateFilter ? ` on ${formatDateDisplay(dateFilter)}` : ""
+          })`}
         >
-          <span className={`h-2 w-2 rounded-full shrink-0 ${unattendedCount > 0 ? "bg-rose-500 animate-pulse" : "bg-rose-300"}`} />
+          <span
+            className={`h-2 w-2 rounded-full shrink-0 ${
+              unattendedCount > 0 ? "bg-rose-500 animate-pulse" : "bg-rose-300"
+            }`}
+          />
           <span className="whitespace-nowrap font-bold">Unattended:</span>
           <span
             className={`text-[10px] px-1.5 py-0.2 rounded-full font-extrabold ${
@@ -230,12 +320,13 @@ export function StatusFilterBar({
 
         <div className="h-4 w-px bg-slate-200 shrink-0 mx-0.5" />
 
-        {/* 4. Hardcoded 7 Follow-Up Status Filter Chips ONLY */}
-        {HARDCODED_STATUS_FILTERS.map((status, idx) => {
+        {/* 4. Follow-Up Status Filter Chips (Filtered by visibility) */}
+        {visibleStatuses.map((status, idx) => {
           const isSelected = Boolean(
             activeFilter &&
-            (activeFilter.toLowerCase() === status.toLowerCase() ||
-             activeFilter.replace(/[–—]/g, "-").toLowerCase() === status.replace(/[–—]/g, "-").toLowerCase())
+              (activeFilter.toLowerCase() === status.toLowerCase() ||
+                activeFilter.replace(/[–—]/g, "-").toLowerCase() ===
+                  status.replace(/[–—]/g, "-").toLowerCase())
           );
 
           const count =
@@ -256,10 +347,14 @@ export function StatusFilterBar({
                   ? `ring-2 ring-blue-600 font-bold shadow-xs ${color.bg} ${color.text} ${color.border}`
                   : `${color.bg} ${color.text} ${color.border} hover:brightness-95 opacity-90 hover:opacity-100`
               }`}
-              title={`Filter by ${status} (${count} leads${dateFilter ? ` on ${formatDateDisplay(dateFilter)}` : ""})`}
+              title={`Filter by ${status} (${count} leads${
+                dateFilter ? ` on ${formatDateDisplay(dateFilter)}` : ""
+              })`}
             >
               <span className="h-1.5 w-1.5 rounded-full bg-current opacity-80 shrink-0" />
-              <span className="truncate max-w-[150px] sm:max-w-none">{status}:</span>
+              <span className="truncate max-w-[150px] sm:max-w-none">
+                {status}:
+              </span>
               <span
                 className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
                   isSelected
@@ -275,6 +370,166 @@ export function StatusFilterBar({
             </button>
           );
         })}
+
+        {/* 5. Lead Source Filter Chips (If enabled in Filter Bar) */}
+        {visibleSources.length > 0 && (
+          <>
+            <div className="h-4 w-px bg-slate-200 shrink-0 mx-0.5" />
+            {visibleSources.map((source, idx) => {
+              const isSelected = Boolean(
+                activeFilter &&
+                  activeFilter.toLowerCase() === source.toLowerCase()
+              );
+
+              const count = statusCounts[source] ?? 0;
+              const color = getSourceColor(source, idx);
+
+              return (
+                <button
+                  type="button"
+                  key={source}
+                  onClick={() => onSelectFilter(isSelected ? null : source)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 shrink-0 border cursor-pointer ${
+                    isSelected
+                      ? `ring-2 ring-indigo-600 font-bold shadow-xs ${color.bg} ${color.text} ${color.border}`
+                      : `${color.bg} ${color.text} ${color.border} hover:brightness-95 opacity-90 hover:opacity-100`
+                  }`}
+                  title={`Filter by Lead Source: ${source} (${count} leads${
+                    dateFilter ? ` on ${formatDateDisplay(dateFilter)}` : ""
+                  })`}
+                >
+                  <Sparkles className="h-3 w-3 text-amber-500 shrink-0" />
+                  <span className="truncate max-w-[130px] sm:max-w-none">
+                    {source}:
+                  </span>
+                  <span
+                    className={`text-[10px] px-1.5 py-0.2 rounded-full font-bold ${
+                      isSelected
+                        ? "bg-slate-900 text-white"
+                        : "bg-white/90 text-slate-900 shadow-2xs border border-slate-200/60"
+                    }`}
+                  >
+                    {count}
+                  </span>
+                  {isSelected && (
+                    <X className="h-3 w-3 ml-0.5 opacity-70 hover:opacity-100" />
+                  )}
+                </button>
+              );
+            })}
+          </>
+        )}
+
+        {/* 6. "More Filters" Dropdown for hidden Lead Sources & Statuses */}
+        {hasMoreFilters && (
+          <div className="relative shrink-0" ref={moreFiltersRef}>
+            <button
+              type="button"
+              onClick={() => setShowMoreFilters(!showMoreFilters)}
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border cursor-pointer ${
+                isMoreFilterActive
+                  ? "bg-indigo-600 text-white border-indigo-700 shadow-xs ring-2 ring-indigo-400 font-bold"
+                  : "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200"
+              }`}
+              title="More status and lead source filters"
+            >
+              <Filter className="h-3 w-3" />
+              <span>More Filters</span>
+              {isMoreFilterActive && (
+                <span className="bg-white/20 text-white px-1.5 py-0.2 rounded-full text-[10px] font-bold truncate max-w-[100px]">
+                  {activeFilter}
+                </span>
+              )}
+              <ChevronDown className="h-3 w-3 opacity-60" />
+            </button>
+
+            {showMoreFilters && (
+              <div
+                className="absolute top-full left-0 mt-1.5 w-64 bg-white rounded-xl shadow-2xl border border-slate-200 py-2 z-50 animate-in fade-in zoom-in-95 text-xs max-h-80 overflow-y-auto"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {/* Hidden Lead Sources Section */}
+                {hiddenSources.length > 0 && (
+                  <div className="mb-2">
+                    <div className="px-3 py-1 text-[10px] font-extrabold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                      <Sparkles className="h-3 w-3 text-indigo-500" />
+                      <span>Lead Sources</span>
+                    </div>
+                    {hiddenSources.map((src) => {
+                      const isSel = Boolean(
+                        activeFilter &&
+                          activeFilter.toLowerCase() === src.toLowerCase()
+                      );
+                      const cnt = statusCounts[src] ?? 0;
+                      return (
+                        <button
+                          key={src}
+                          type="button"
+                          onClick={() => {
+                            onSelectFilter(isSel ? null : src);
+                            setShowMoreFilters(false);
+                          }}
+                          className={`w-full px-3 py-1.5 text-left flex items-center justify-between text-xs hover:bg-slate-50 transition-colors ${
+                            isSel
+                              ? "font-bold text-indigo-600 bg-indigo-50/50"
+                              : "text-slate-700 font-medium"
+                          }`}
+                        >
+                          <span className="truncate">{src}</span>
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-100 text-slate-600 font-mono font-semibold">
+                            {cnt}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Hidden Follow-Up Statuses Section */}
+                {hiddenStatuses.length > 0 && (
+                  <div>
+                    <div className="px-3 py-1 text-[10px] font-extrabold text-slate-400 uppercase tracking-wider border-t border-slate-100 pt-1.5 flex items-center gap-1">
+                      <span>Follow-Up Statuses</span>
+                    </div>
+                    {hiddenStatuses.map((st) => {
+                      const isSel = Boolean(
+                        activeFilter &&
+                          (activeFilter.toLowerCase() === st.toLowerCase() ||
+                            activeFilter.replace(/[–—]/g, "-").toLowerCase() ===
+                              st.replace(/[–—]/g, "-").toLowerCase())
+                      );
+                      const cnt =
+                        statusCounts[st] ??
+                        statusCounts[st.replace("–", "-")] ??
+                        statusCounts[st.replace("-", "–")] ??
+                        0;
+                      return (
+                        <button
+                          key={st}
+                          type="button"
+                          onClick={() => {
+                            onSelectFilter(isSel ? null : st);
+                            setShowMoreFilters(false);
+                          }}
+                          className={`w-full px-3 py-1.5 text-left flex items-center justify-between text-xs hover:bg-slate-50 transition-colors ${
+                            isSel
+                              ? "font-bold text-blue-600 bg-blue-50/50"
+                              : "text-slate-700 font-medium"
+                          }`}
+                        >
+                          <span className="truncate">{st}</span>
+                          <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-slate-100 text-slate-600 font-mono font-semibold">
+                            {cnt}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Scroll Right Button */}
@@ -299,7 +554,9 @@ export function StatusFilterBar({
           title="Reset all filters to show all leads"
         >
           <X className="h-3 w-3" />
-          <span className="hidden sm:inline">Clear {dateFilter && activeFilter ? "All" : "Filter"}</span>
+          <span className="hidden sm:inline">
+            Clear {dateFilter && activeFilter ? "All" : "Filter"}
+          </span>
         </button>
       )}
 
@@ -315,7 +572,6 @@ export function StatusFilterBar({
           <span>Customize Options</span>
         </button>
       )}
-
     </div>
   );
 }

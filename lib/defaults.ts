@@ -108,7 +108,8 @@ export const DEFAULT_COLUMNS: ColumnDef[] = [
     type: "dropdown",
     width: 160,
     headerStyle: "gold",
-    options: DEFAULT_LEAD_SOURCES
+    options: DEFAULT_LEAD_SOURCES,
+    filterVisibility: DEFAULT_SOURCE_FILTER_VISIBILITY
   },
   {
     id: "col_followup_1",
@@ -116,7 +117,8 @@ export const DEFAULT_COLUMNS: ColumnDef[] = [
     type: "dropdown",
     width: 200,
     headerStyle: "navy",
-    options: DEFAULT_FOLLOWUP_OPTIONS
+    options: DEFAULT_FOLLOWUP_OPTIONS,
+    filterVisibility: DEFAULT_STATUS_FILTER_VISIBILITY
   },
   {
     id: "col_followup_1_date",
@@ -203,5 +205,30 @@ export const SOURCE_COLORS: Record<string, { bg: string; text: string; border: s
   "Walk-in": { bg: "bg-orange-50", text: "text-orange-700 font-semibold", border: "border-orange-200" },
   "Website": { bg: "bg-cyan-50", text: "text-cyan-700 font-semibold", border: "border-cyan-200" },
   "MagicBricks / 99acres": { bg: "bg-rose-50", text: "text-rose-700 font-semibold", border: "border-rose-200" },
+  "99acers": { bg: "bg-rose-50", text: "text-rose-700 font-semibold", border: "border-rose-200" },
   "Cold Call": { bg: "bg-slate-100", text: "text-slate-700 font-semibold", border: "border-slate-300" },
+  "Hoarding": { bg: "bg-amber-50", text: "text-amber-800 font-semibold", border: "border-amber-300" },
 };
+
+const SOURCE_FALLBACK_PALETTES = [
+  { bg: "bg-indigo-50", text: "text-indigo-700 font-semibold", border: "border-indigo-200" },
+  { bg: "bg-teal-50", text: "text-teal-700 font-semibold", border: "border-teal-200" },
+  { bg: "bg-pink-50", text: "text-pink-700 font-semibold", border: "border-pink-200" },
+  { bg: "bg-lime-50", text: "text-lime-700 font-semibold", border: "border-lime-200" },
+  { bg: "bg-sky-50", text: "text-sky-700 font-semibold", border: "border-sky-200" },
+  { bg: "bg-fuchsia-50", text: "text-fuchsia-700 font-semibold", border: "border-fuchsia-200" },
+];
+
+export function getSourceColor(source: string, index = 0): { bg: string; text: string; border: string } {
+  if (SOURCE_COLORS[source]) return SOURCE_COLORS[source];
+  const normalized = Object.keys(SOURCE_COLORS).find(
+    (k) => k.toLowerCase() === source.toLowerCase()
+  );
+  if (normalized && SOURCE_COLORS[normalized]) return SOURCE_COLORS[normalized];
+  let hash = 0;
+  for (let i = 0; i < source.length; i++) {
+    hash = (hash << 5) - hash + source.charCodeAt(i);
+  }
+  const paletteIdx = Math.abs(hash + index) % SOURCE_FALLBACK_PALETTES.length;
+  return SOURCE_FALLBACK_PALETTES[paletteIdx];
+}

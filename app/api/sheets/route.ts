@@ -56,7 +56,15 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({ sheets: formatted });
+    let totalOrganizationLeads: number | undefined;
+    if (user.role === "ADMIN") {
+      totalOrganizationLeads = formatted.reduce((sum, s) => sum + s.rowCount, 0);
+    }
+
+    return NextResponse.json({
+      sheets: formatted,
+      totalOrganizationLeads,
+    });
   } catch (error: any) {
     console.error("Error fetching sheets:", error);
     return NextResponse.json(
@@ -91,7 +99,14 @@ export async function POST(req: Request) {
     }
 
     const count = await prisma.sheet.count();
-    const sheetColumns = columns || DEFAULT_COLUMNS;
+    let sheetColumns = columns;
+    if (!sheetColumns) {
+      const existingSheet = await prisma.sheet.findFirst({
+        orderBy: { createdAt: "desc" },
+        select: { columns: true },
+      });
+      sheetColumns = existingSheet?.columns ? JSON.parse(existingSheet.columns) : DEFAULT_COLUMNS;
+    }
 
     const newSheet = await prisma.sheet.create({
       data: {

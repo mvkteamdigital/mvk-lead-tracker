@@ -49,6 +49,7 @@ interface TopToolbarProps {
   canUndo?: boolean;
   canRedo?: boolean;
   totalLeads?: number;
+  organizationTotalLeads?: number;
   dateFilter?: string | null;
   onRefresh?: () => void;
   isRefreshing?: boolean;
@@ -71,6 +72,7 @@ export function TopToolbar({
   canUndo = false,
   canRedo = false,
   totalLeads,
+  organizationTotalLeads,
   dateFilter = null,
   onRefresh,
   isRefreshing = false,
@@ -151,11 +153,31 @@ export function TopToolbar({
               <span className="font-bold text-slate-900 text-xs sm:text-sm tracking-tight whitespace-nowrap">
                 MVK Lead Tracker
               </span>
-              <span className="text-[10px] sm:text-[11px] px-1.5 sm:px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold border border-slate-200 truncate max-w-[90px] sm:max-w-none">
+
+              {/* PART 3: Admin Organization-Wide Total Lead Count (Visible on mobile and desktop directly beside title) */}
+              {user?.role === "ADMIN" && organizationTotalLeads !== undefined && (
+                <div className="flex items-center gap-1 sm:gap-1.5 whitespace-nowrap">
+                  <span className="text-slate-300 font-light select-none text-xs">|</span>
+                  <span
+                    className="text-[10px] sm:text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-950 font-extrabold border border-amber-300 shadow-2xs flex items-center gap-1"
+                    title={`Organization-Wide Inventory: ${organizationTotalLeads} countable leads across all team sheets`}
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-600 shrink-0" />
+                    <span>{organizationTotalLeads} {organizationTotalLeads === 1 ? "Lead" : "Leads"}</span>
+                    <span className="text-[9px] px-1 py-0.2 bg-amber-200 text-amber-900 font-bold rounded uppercase hidden sm:inline">
+                      Org Total
+                    </span>
+                  </span>
+                </div>
+              )}
+
+              {/* PART 2: Remove duplicate member & sheet info on mobile! Only show on desktop (md+) */}
+              <span className="hidden md:inline-flex text-[10px] sm:text-[11px] px-1.5 sm:px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-semibold border border-slate-200 truncate max-w-[120px] sm:max-w-none">
                 {sheet?.name ? `Sheet: ${sheet.name}` : "Loading..."}
               </span>
+
               {totalLeads !== undefined && (
-                <span className="text-[10px] sm:text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-950 font-bold border border-amber-300 whitespace-nowrap shadow-2xs flex items-center gap-1">
+                <span className="hidden md:inline-flex text-[10px] sm:text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-800 font-bold border border-slate-300 whitespace-nowrap shadow-2xs items-center gap-1">
                   <span>{totalLeads} {totalLeads === 1 ? "Lead" : "Leads"}</span>
                   {dateFilter && (
                     <span className="text-[9px] px-1 py-0.2 bg-amber-300 text-amber-950 font-black rounded">
@@ -164,8 +186,9 @@ export function TopToolbar({
                   )}
                 </span>
               )}
+
               {sheet?.user && (
-                <span className="text-[10px] text-slate-500 hidden sm:inline truncate">
+                <span className="text-[10px] text-slate-500 hidden lg:inline truncate">
                   (Owner: {sheet.user.name})
                 </span>
               )}

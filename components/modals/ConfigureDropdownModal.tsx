@@ -85,6 +85,8 @@ export function ConfigureDropdownModal({
   // Multi-column config state
   const [configState, setConfigState] = useState<Record<string, ColumnConfigState>>({});
   const [newOption, setNewOption] = useState("");
+  const [showInFilterBarDefault, setShowInFilterBarDefault] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Sync state whenever modal opens or column changes
@@ -138,9 +140,22 @@ export function ConfigureDropdownModal({
 
   const handleAddOption = (e: React.FormEvent) => {
     e.preventDefault();
+    setErrorMsg(null);
     const trimmed = newOption.trim();
-    if (!trimmed || !currentCol) return;
-    if (currentConfig.options.includes(trimmed)) return;
+    if (!trimmed) {
+      setErrorMsg("Option name cannot be empty.");
+      return;
+    }
+    if (!currentCol) return;
+
+    // Strict case-insensitive duplicate check
+    const isDuplicate = currentConfig.options.some(
+      (opt) => opt.trim().toLowerCase() === trimmed.toLowerCase()
+    );
+    if (isDuplicate) {
+      setErrorMsg(`"${trimmed}" already exists in ${currentCol.name}.`);
+      return;
+    }
 
     setConfigState((prev) => {
       const colId = currentCol.id;
@@ -149,15 +164,16 @@ export function ConfigureDropdownModal({
         ...prev,
         [colId]: {
           options: [...existing.options, trimmed],
-          // Default new option to visible in dashboard filter bar
+          // Respect the user's chosen default for filter bar visibility
           filterVisibility: {
             ...existing.filterVisibility,
-            [trimmed]: true,
+            [trimmed]: showInFilterBarDefault,
           },
         },
       };
     });
     setNewOption("");
+    setErrorMsg(null);
   };
 
   const handleToggleVisibility = (opt: string, isVisible: boolean) => {
@@ -264,7 +280,10 @@ export function ConfigureDropdownModal({
                 <button
                   type="button"
                   key={col.id}
-                  onClick={() => setActiveColId(col.id)}
+                  onClick={() => {
+                    setActiveColId(col.id);
+                    setErrorMsg(null);
+                  }}
                   className={`px-3.5 py-2 text-xs font-semibold rounded-t-lg border-b-2 flex items-center gap-1.5 transition-all cursor-pointer ${
                     isSelected
                       ? "border-amber-500 text-slate-900 bg-white shadow-2xs font-bold"
@@ -301,22 +320,49 @@ export function ConfigureDropdownModal({
           </div>
 
           {/* Add Option Form */}
-          <form onSubmit={handleAddOption} className="flex gap-2 mb-4">
-            <input
-              type="text"
-              placeholder={`Add new ${currentCol?.name.toLowerCase()} option...`}
-              value={newOption}
-              onChange={(e) => setNewOption(e.target.value)}
-              className="flex-1 px-3 py-2 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-500 text-slate-800 font-medium"
-            />
-            <button
-              type="submit"
-              disabled={!newOption.trim()}
-              className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-bold text-xs rounded-lg flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              <span>Add</span>
-            </button>
+          <form onSubmit={handleAddOption} className="space-y-2 mb-4">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                placeholder={`Add new ${currentCol?.name.toLowerCase()} option (e.g. Hoarding)...`}
+                value={newOption}
+                onChange={(e) => {
+                  setNewOption(e.target.value);
+                  if (errorMsg) setErrorMsg(null);
+                }}
+                className={`flex-1 px-3 py-2 text-xs border rounded-lg focus:outline-none focus:ring-2 text-slate-800 font-medium ${
+                  errorMsg
+                    ? "border-rose-300 focus:ring-rose-500 bg-rose-50/20"
+                    : "border-slate-300 focus:ring-amber-500"
+                }`}
+              />
+              <button
+                type="submit"
+                disabled={!newOption.trim()}
+                className="px-3.5 py-2 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-bold text-xs rounded-lg flex items-center gap-1.5 transition-colors shadow-2xs cursor-pointer"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>Add</span>
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between px-1">
+              <label className="flex items-center gap-2 text-[11px] font-semibold text-slate-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={showInFilterBarDefault}
+                  onChange={(e) => setShowInFilterBarDefault(e.target.checked)}
+                  className="h-3.5 w-3.5 text-amber-600 rounded border-slate-300 focus:ring-amber-500 cursor-pointer accent-amber-500"
+                />
+                <span>Show in Dashboard Filter Bar by default</span>
+              </label>
+
+              {errorMsg && (
+                <span className="text-[11px] font-bold text-rose-600 flex items-center gap-1">
+                  ⚠️ {errorMsg}
+                </span>
+              )}
+            </div>
           </form>
 
           {/* Options List with Checkbox Toggle */}

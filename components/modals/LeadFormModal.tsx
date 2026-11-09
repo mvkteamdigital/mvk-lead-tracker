@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { RowData, ColumnDef } from "@/lib/types";
-import { DEFAULT_FOLLOWUP_OPTIONS } from "@/lib/defaults";
+import { DEFAULT_FOLLOWUP_OPTIONS, DEFAULT_LEAD_SOURCES } from "@/lib/defaults";
 import {
   X,
   Check,
@@ -64,7 +64,9 @@ export function LeadFormModal({
   // Dynamic dropdown options lookup bound to the column state
   const getColOptions = (colId: string, indexFallback: number): string[] => {
     const col = getCol(colId, indexFallback);
-    return col?.options && col.options.length > 0 ? col.options : DEFAULT_FOLLOWUP_OPTIONS;
+    if (col?.options && col.options.length > 0) return col.options;
+    if (colId === "col_lead_source" || colId.includes("source")) return DEFAULT_LEAD_SOURCES;
+    return DEFAULT_FOLLOWUP_OPTIONS;
   };
 
   // Detect any additional custom columns added beyond the standard 16
@@ -292,6 +294,15 @@ export function LeadFormModal({
                     {src}
                   </option>
                 ))}
+                {/* Preserve existing source if not in current options list */}
+                {formData["col_lead_source"] &&
+                  !getColOptions("col_lead_source", 6).some(
+                    (opt) => opt.toLowerCase() === formData["col_lead_source"].toLowerCase()
+                  ) && (
+                    <option value={formData["col_lead_source"]}>
+                      {formData["col_lead_source"]}
+                    </option>
+                  )}
               </select>
             </div>
           </div>

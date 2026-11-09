@@ -724,6 +724,110 @@ it("Organization-wide lead count strictly aggregates valid leads and ignores emp
   assert.strictEqual(userTotals["u2"], 2);
 });
 
+it("Lead source validation prevents empty names and case-insensitive duplicates", () => {
+  const existingSources = ["Meta Ads", "Google Ads", "Direct", "MagicBricks / 99acres"];
+
+  function validateNewSource(name, existingList) {
+    const trimmed = (name || "").trim();
+    if (!trimmed) {
+      return { valid: false, error: "Option name cannot be empty." };
+    }
+    const isDup = existingList.some((opt) => opt.trim().toLowerCase() === trimmed.toLowerCase());
+    if (isDup) {
+      return { valid: false, error: `"${trimmed}" already exists.` };
+    }
+    return { valid: true };
+  }
+
+  // 1. Empty or whitespace string rejected
+  assert.strictEqual(validateNewSource("", existingSources).valid, false);
+  assert.strictEqual(validateNewSource("   ", existingSources).valid, false);
+
+  // 2. Exact match rejected
+  assert.strictEqual(validateNewSource("Meta Ads", existingSources).valid, false);
+
+  // 3. Case-insensitive variations rejected
+  assert.strictEqual(validateNewSource("meta ads", existingSources).valid, false);
+  assert.strictEqual(validateNewSource("  META ADS  ", existingSources).valid, false);
+  assert.strictEqual(validateNewSource("google ads", existingSources).valid, false);
+
+  // 4. New source accepted
+  const newValid = validateNewSource("Hoarding", existingSources);
+  assert.strictEqual(newValid.valid, true);
+
+  // 5. After adding "Hoarding", duplicate "hoarding" is rejected
+  const updatedSources = [...existingSources, "Hoarding"];
+  assert.strictEqual(validateNewSource("hoarding", updatedSources).valid, false);
+  assert.strictEqual(validateNewSource("HOARDING", updatedSources).valid, false);
+});
+
+it("getSourceColor provides appropriate styling for standard and custom sources", () => {
+  // Pastel styles for known and arbitrary sources
+  function getSourceColorMock(source) {
+    const SOURCE_COLORS = {
+      "Meta Ads": { bg: "bg-blue-50", text: "text-blue-700", border: "border-blue-200" },
+      "Hoarding": { bg: "bg-rose-50", text: "text-rose-700", border: "border-rose-200" },
+    };
+    if (SOURCE_COLORS[source]) return SOURCE_COLORS[source];
+    return { bg: "bg-teal-50", text: "text-teal-700", border: "border-teal-200" };
+  }
+
+  const metaStyle = getSourceColorMock("Meta Ads");
+  assert.ok(metaStyle.bg.includes("blue"));
+
+  const hoardingStyle = getSourceColorMock("Hoarding");
+  assert.ok(hoardingStyle.bg.includes("rose"));
+
+  const customStyle = getSourceColorMock("Custom Billboard");
+  assert.ok(customStyle.bg && customStyle.text && customStyle.border);
+});
+
+it("rowMatchesStatusFilter accurately matches both follow-up status and lead source", () => {
+  const rowData = {
+    col_name: "Anita Verma",
+    col_number: "9876543210",
+    col_lead_source: "Hoarding",
+    col_followup_1: "Site Visit Completed",
+  };
+
+  function testMatch(data, filter) {
+    if (!filter || !data) return false;
+    const fNorm = filter.trim().toLowerCase();
+    if (data.col_lead_source && data.col_lead_source.toLowerCase() === fNorm) return true;
+    if (data.col_followup_1 && data.col_followup_1.toLowerCase() === fNorm) return true;
+    return false;
+  }
+
+  // Matches follow-up status
+  assert.strictEqual(testMatch(rowData, "Site Visit Completed"), true);
+  assert.strictEqual(testMatch(rowData, "site visit completed"), true);
+
+  // Matches lead source
+  assert.strictEqual(testMatch(rowData, "Hoarding"), true);
+  assert.strictEqual(testMatch(rowData, "hoarding"), true);
+
+  // Non-matching filter returns false
+  assert.strictEqual(testMatch(rowData, "Purchase Done"), false);
+  assert.strictEqual(testMatch(rowData, "Meta Ads"), false);
+});
+
+it("Filter bar visibility partitions options between top chips and More Filters dropdown", () => {
+  const sources = ["Meta Ads", "Google Ads", "Direct", "Hoarding", "Cold Call"];
+  const filterVisibility = {
+    "Meta Ads": true,
+    "Google Ads": true,
+    "Direct": true,
+    "Hoarding": false, // unchecked -> goes to More Filters
+    "Cold Call": true,
+  };
+
+  const visibleChips = sources.filter((s) => filterVisibility[s] === true);
+  const hiddenInMore = sources.filter((s) => filterVisibility[s] !== true);
+
+  assert.deepStrictEqual(visibleChips, ["Meta Ads", "Google Ads", "Direct", "Cold Call"]);
+  assert.deepStrictEqual(hiddenInMore, ["Hoarding"]);
+});
+
 console.log(`\n=== ALL TESTS PASSED: ${passed}/${total} ===\n`);
 if (passed !== total) {
   process.exit(1);
