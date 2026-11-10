@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { extractPhoneInfo, getRowPhoneNumber, isNameFieldKey, getLeadName } from "@/lib/leads";
+import { extractPhoneInfo, getRowPhoneNumber, isNameFieldKey, getLeadName, isValidLead } from "@/lib/leads";
 
 // Helper to query duplicate phone number across all user sheets
 async function findDuplicateLead(phone: string, excludeRowId?: string) {
@@ -206,6 +206,7 @@ export async function POST(req: Request) {
     });
     const orderToUse = body.order !== undefined ? body.order : (lastRow?.order ?? -1) + 1;
 
+    const now = new Date();
     const row = await prisma.row.create({
       data: {
         sheetId,
@@ -214,7 +215,8 @@ export async function POST(req: Request) {
         phoneDigits: phoneDigits || null,
         data: JSON.stringify(dataObj),
         styles: typeof body.styles === "string" ? body.styles : JSON.stringify(body.styles || {}),
-        nameModifiedAt: new Date(),
+        nameModifiedAt: now,
+        createdAt: now,
         ...extractFollowupDates(dataObj),
       },
     });
@@ -324,13 +326,21 @@ async function handleUpdateLead(req: Request) {
     const hasNameKeyInPayload = Object.keys(incomingData).some((k) => isNameFieldKey(k));
     const isNameChanged = hasNameKeyInPayload && oldName !== newName;
 
+    // Check whether existing row was an empty placeholder row (no valid lead data)
+    // and is now receiving its first valid lead data. If so, assign today's timestamp as its Added Date!
+    const wasEmptyPlaceholder = !isValidLead(currentData);
+    const isNowValidLead = isValidLead(mergedData);
+    const isFirstTimeLeadCreation = wasEmptyPlaceholder && isNowValidLead;
+
+    const now = new Date();
     const updated = await prisma.row.update({
       where: { id: rowId },
       data: {
         data: JSON.stringify(mergedData),
         phoneNumber: phoneExact || null,
         phoneDigits: phoneDigits || null,
-        ...(isNameChanged ? { nameModifiedAt: new Date() } : {}),
+        ...(isFirstTimeLeadCreation ? { createdAt: now } : {}),
+        ...(isNameChanged || isFirstTimeLeadCreation ? { nameModifiedAt: now } : {}),
         ...extractFollowupDates(mergedData),
         ...(body.styles ? { styles: typeof body.styles === "string" ? body.styles : JSON.stringify(body.styles) } : {}),
       },

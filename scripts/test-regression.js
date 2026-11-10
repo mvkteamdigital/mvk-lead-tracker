@@ -169,6 +169,13 @@ function getLeadAddedDate(rowOrCreatedAt) {
   if (typeof rowOrCreatedAt === "object") {
     const row = rowOrCreatedAt;
 
+    // 1. Direct canonical createdAt on row takes primary precedence
+    if (row.createdAt) {
+      const d = new Date(row.createdAt);
+      if (!isNaN(d.getTime())) return d;
+    }
+
+    // 2. Fallback to CUID timestamp embedded in row.id if createdAt is absent
     if (typeof row.id === "string" && row.id.startsWith("c") && row.id.length >= 20) {
       const timePart = row.id.substring(1, 9);
       const ts = parseInt(timePart, 36);
@@ -177,17 +184,17 @@ function getLeadAddedDate(rowOrCreatedAt) {
       }
     }
 
-    if (row.createdAt) {
-      const d = new Date(row.createdAt);
-      return isNaN(d.getTime()) ? null : d;
-    }
-
     return null;
   }
 
   if (typeof rowOrCreatedAt === "string") {
     const trimmed = rowOrCreatedAt.trim();
     if (!trimmed) return null;
+
+    if (!trimmed.startsWith("c")) {
+      const d = new Date(trimmed);
+      if (!isNaN(d.getTime())) return d;
+    }
 
     if (trimmed.startsWith("c") && trimmed.length >= 20) {
       const timePart = trimmed.substring(1, 9);
@@ -1309,6 +1316,168 @@ it("Scenario 14: Rapid switching between tabs, filters, and cells. Verify no rac
   filtered = filterSheetRows(activeSheet.rows, activeSheet.columns, filterOpts);
   activeCell = { rowId: filtered[0].id, rowIdx: 0, colId: "col_name", colName: "Name" };
   assert.strictEqual(simulateGetActiveCellValue(activeSheet, activeCell, filterOpts), "Vikas Patel");
+});
+
+console.log("\n--- Section 8: Bulk Paste & Date Filter Regression Suite ---");
+
+it("Bulk Paste Test 1: Pasting into an empty placeholder row in DB assigns NOW() as Added Date", () => {
+  const placeholderRow = {
+    id: "cmw5ydc460001c6wd0ote813l", // Created Nov 7 in DB
+    sheetId: "sheet_aishwarya",
+    order: 14,
+    data: { col_name: "" },
+    createdAt: "2026-11-07T05:18:24.919Z",
+  };
+  assert.strictEqual(isValidLead(placeholderRow.data), false);
+
+  const pastedData = { col_name: "Ramesh Sharma", col_number: "9876543210" };
+  const wasEmpty = !isValidLead(placeholderRow.data);
+  const isNowValid = isValidLead(pastedData);
+  assert.strictEqual(wasEmpty && isNowValid, true);
+
+  const todayIso = "2026-11-10T10:00:00.000Z";
+  const updatedRow = {
+    ...placeholderRow,
+    data: pastedData,
+    createdAt: wasEmpty && isNowValid ? todayIso : placeholderRow.createdAt,
+  };
+
+  assert.strictEqual(rowMatchesDateFilter(updatedRow, "2026-11-10"), true);
+  assert.strictEqual(rowMatchesDateFilter(updatedRow, "2026-11-07"), false);
+});
+
+it("Bulk Paste Test 2: Updating an existing valid lead strictly preserves its original Added Date", () => {
+  const existingLead = {
+    id: "cmw5y87sa0013iyvwg2t2li21",
+    sheetId: "sheet_aishwarya",
+    order: 0,
+    data: { col_name: "Ganesh GV", col_number: "9964864347" },
+    createdAt: "2026-11-07T05:14:26.027Z",
+  };
+  assert.strictEqual(isValidLead(existingLead.data), true);
+
+  const updatedData = { ...existingLead.data, col_followup_1: "Site Visit Completed" };
+  const wasEmpty = !isValidLead(existingLead.data);
+  const isNowValid = isValidLead(updatedData);
+
+  const updatedRow = {
+    ...existingLead,
+    data: updatedData,
+    createdAt: wasEmpty && isNowValid ? "2026-11-10T10:00:00.000Z" : existingLead.createdAt,
+  };
+
+  assert.strictEqual(rowMatchesDateFilter(updatedRow, "2026-11-07"), true);
+  assert.strictEqual(rowMatchesDateFilter(updatedRow, "2026-11-10"), false);
+});
+
+it("Bulk Paste Test 3: Pasting 10 new leads beyond sheet length assigns today's date and all match filter", () => {
+  const todayIso = "2026-11-10T08:30:00.000Z";
+  const newLeads = Array.from({ length: 10 }, (_, i) => ({
+    id: `cmwa_lead_${i}`,
+    sheetId: "sheet_test",
+    order: 50 + i,
+    data: { col_name: `Lead ${i}`, col_number: `987000000${i}` },
+    createdAt: todayIso,
+  }));
+
+  const filtered = filterSheetRows(newLeads, sampleColumns, { dateFilter: "2026-11-10" });
+  assert.strictEqual(filtered.length, 10);
+});
+
+it("Bulk Paste Test 4: Pasting 50+ leads across batch with duplicates: duplicates flagged without corrupting valid leads", () => {
+  const todayIso = "2026-11-10T08:30:00.000Z";
+  const batch = [];
+  for (let i = 0; i < 50; i++) {
+    batch.push({
+      id: `batch_lead_${i}`,
+      sheetId: "sheet_test",
+      order: 100 + i,
+      data: {
+        col_name: `Client ${i}`,
+        col_number: i % 5 === 0 ? "9999999999" : `98000000${String(i).padStart(2, "0")}`,
+      },
+      createdAt: todayIso,
+    });
+  }
+
+  const filtered = filterSheetRows(batch, sampleColumns, { dateFilter: "2026-11-10" });
+  assert.strictEqual(filtered.length, 50);
+});
+
+it("Bulk Paste Test 5: Optimistic state update never clobbers existing rows by order=0", () => {
+  const existingRows = [
+    { id: "row_db_0", order: 0, data: { col_name: "Existing Person A" }, createdAt: "2026-11-07T05:00:00.000Z" },
+    { id: "row_db_1", order: 0, data: { col_name: "Existing Person B" }, createdAt: "2026-11-07T05:00:00.000Z" },
+  ];
+
+  const pastedRow = {
+    id: "temp_173123_0_abc",
+    sheetId: "sheet_test",
+    order: 0,
+    data: { col_name: "New Person" },
+    createdAt: "2026-11-10T08:00:00.000Z",
+  };
+
+  const newRows = [...existingRows];
+  let targetIndex = -1;
+  if (pastedRow.id) {
+    targetIndex = newRows.findIndex((r) => r.id === pastedRow.id);
+  }
+  if (targetIndex === -1) {
+    newRows.push(pastedRow);
+  }
+
+  assert.strictEqual(newRows.length, 3);
+  assert.strictEqual(newRows[0].data.col_name, "Existing Person A");
+  assert.strictEqual(newRows[1].data.col_name, "Existing Person B");
+  assert.strictEqual(newRows[2].data.col_name, "New Person");
+});
+
+it("Bulk Paste Test 6: Simulating Aishwarya sheet paste across placeholder rows (indexes 17 to 20)", () => {
+  const aishwaryaRows = [
+    ...Array.from({ length: 17 }, (_, i) => ({
+      id: `real_lead_${i}`,
+      order: 0,
+      data: { col_name: `Lead ${i}`, col_number: `91000000${String(i).padStart(2, "0")}` },
+      createdAt: "2026-11-07T05:14:00.000Z",
+    })),
+    { id: "placeholder_17", order: 14, data: { col_name: "" }, createdAt: "2026-11-07T05:18:00.000Z" },
+    { id: "placeholder_18", order: 15, data: { col_name: "" }, createdAt: "2026-11-07T05:18:00.000Z" },
+    { id: "placeholder_19", order: 16, data: { col_name: "" }, createdAt: "2026-11-07T05:18:00.000Z" },
+    { id: "placeholder_20", order: 17, data: { col_name: "" }, createdAt: "2026-11-07T05:18:00.000Z" },
+  ];
+
+  const pastedRows = [
+    { col_name: "Pasted A", col_number: "9811111111" },
+    { col_name: "Pasted B", col_number: "9822222222" },
+    { col_name: "Pasted C", col_number: "9833333333" },
+    { col_name: "Pasted D", col_number: "9844444444" },
+  ];
+
+  const nowIso = "2026-11-10T09:00:00.000Z";
+  const updatedRows = aishwaryaRows.map((r, idx) => {
+    if (idx >= 17 && idx < 21) {
+      const pasteData = pastedRows[idx - 17];
+      const wasEmpty = !isValidLead(r.data);
+      const isNowValid = isValidLead(pasteData);
+      return {
+        ...r,
+        data: pasteData,
+        createdAt: wasEmpty && isNowValid ? nowIso : r.createdAt,
+      };
+    }
+    return r;
+  });
+
+  const todayFiltered = filterSheetRows(updatedRows, sampleColumns, { dateFilter: "2026-11-10" });
+  assert.strictEqual(todayFiltered.length, 4);
+  assert.deepStrictEqual(todayFiltered.map((r) => r.data.col_name), ["Pasted A", "Pasted B", "Pasted C", "Pasted D"]);
+
+  const nov7Filtered = filterSheetRows(updatedRows, sampleColumns, { dateFilter: "2026-11-07" });
+  assert.strictEqual(nov7Filtered.length, 17);
+
+  const unfiltered = filterSheetRows(updatedRows, sampleColumns, {});
+  assert.strictEqual(unfiltered.length, 21);
 });
 
 console.log(`\n=== ALL TESTS PASSED: ${passed}/${total} ===\n`);

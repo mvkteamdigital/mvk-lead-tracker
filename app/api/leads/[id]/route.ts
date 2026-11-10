@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { extractPhoneInfo, getRowPhoneNumber, isNameFieldKey, getLeadName } from "@/lib/leads";
+import { extractPhoneInfo, getRowPhoneNumber, isNameFieldKey, getLeadName, isValidLead } from "@/lib/leads";
 
 interface Params {
   params: { id: string };
@@ -149,6 +149,12 @@ async function updateLeadById(req: Request, id: string) {
     const newName = getLeadName(mergedData);
     const isNameChanged = oldName !== newName && Object.keys(incomingData).some((k) => isNameFieldKey(k));
 
+    // Check whether existing row was an empty placeholder row (no valid lead data)
+    // and is now receiving its first valid lead data. If so, assign today's timestamp as its Added Date!
+    const wasEmptyPlaceholder = !isValidLead(currentData);
+    const isNowValidLead = isValidLead(mergedData);
+    const isFirstTimeLeadCreation = wasEmptyPlaceholder && isNowValidLead;
+
     const phone = getRowPhoneNumber(mergedData);
     if (phone) {
       const dup = await findDuplicateLead(phone, id);
@@ -168,13 +174,15 @@ async function updateLeadById(req: Request, id: string) {
 
     const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
 
+    const now = new Date();
     const updated = await prisma.row.update({
       where: { id },
       data: {
         data: JSON.stringify(mergedData),
         phoneNumber: phoneExact || null,
         phoneDigits: phoneDigits || null,
-        ...(isNameChanged ? { nameModifiedAt: new Date() } : {}),
+        ...(isFirstTimeLeadCreation ? { createdAt: now } : {}),
+        ...(isNameChanged || isFirstTimeLeadCreation ? { nameModifiedAt: now } : {}),
         ...extractFollowupDates(mergedData),
         ...(body.styles ? { styles: typeof body.styles === "string" ? body.styles : JSON.stringify(body.styles) } : {}),
       },

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { extractPhoneInfo, getRowPhoneNumber, isNameFieldKey, getLeadName } from "@/lib/leads";
+import { extractPhoneInfo, getRowPhoneNumber, isNameFieldKey, getLeadName, isValidLead } from "@/lib/leads";
 
 interface Params {
   params: { id: string };
@@ -283,29 +283,28 @@ export async function PUT(req: Request, { params }: Params) {
         });
       }
 
-      if (!existing && body.order !== undefined) {
-        existing = await prisma.row.findFirst({
-          where: { sheetId, order: body.order },
-        });
-      }
-
       if (existing && existing.sheetId === sheetId) {
         const currentData = JSON.parse(existing.data || "{}");
+        const wasEmptyPlaceholder = !isValidLead(currentData);
         const oldName = getLeadName(currentData);
         currentData[body.columnId] = body.value;
         const newName = getLeadName(currentData);
         const isNameChanged = isNameFieldKey(body.columnId) && oldName !== newName;
+        const isNowValidLead = isValidLead(currentData);
+        const isFirstTimeLeadCreation = wasEmptyPlaceholder && isNowValidLead;
 
         const phone = getRowPhoneNumber(currentData);
         const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
 
+        const now = new Date();
         const updated = await prisma.row.update({
           where: { id: existing.id },
           data: {
             data: JSON.stringify(currentData),
             phoneNumber: phoneExact || null,
             phoneDigits: phoneDigits || null,
-            ...(isNameChanged ? { nameModifiedAt: new Date() } : {}),
+            ...(isFirstTimeLeadCreation ? { createdAt: now } : {}),
+            ...(isNameChanged || isFirstTimeLeadCreation ? { nameModifiedAt: now } : {}),
             ...extractFollowupDates(currentData),
           },
         });
@@ -325,11 +324,20 @@ export async function PUT(req: Request, { params }: Params) {
         });
       }
 
-      // If row does not exist in DB yet (editing one of the 1,000 blank rows)
-      const orderVal = body.order !== undefined ? body.order : 0;
+      // If row does not exist in DB yet (editing one of the blank rows)
+      const lastRow = await prisma.row.findFirst({
+        where: { sheetId },
+        orderBy: { order: "desc" },
+        select: { order: true },
+      });
+      const nextOrder = (lastRow?.order ?? -1) + 1;
+      const orderVal =
+        body.order !== undefined && body.order >= nextOrder ? body.order : nextOrder;
+
       const initialData = { [body.columnId]: body.value };
       const phone = getRowPhoneNumber(initialData);
       const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
+      const now = new Date();
 
       const newRow = await prisma.row.create({
         data: {
@@ -339,7 +347,8 @@ export async function PUT(req: Request, { params }: Params) {
           phoneDigits: phoneDigits || null,
           data: JSON.stringify(initialData),
           styles: JSON.stringify({}),
-          nameModifiedAt: new Date(),
+          nameModifiedAt: now,
+          createdAt: now,
           ...extractFollowupDates(initialData),
         },
       });

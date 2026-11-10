@@ -658,25 +658,22 @@ export function SpreadsheetApp() {
       if (!prev) return prev;
       let targetIndex = -1;
 
-      // 1. Strictly match by unique database ID first
-      if (rowId && !rowId.startsWith("temp_")) {
-        targetIndex = prev.rows.findIndex((r) => r.id === rowId);
-      }
-      // 2. If rowId is temp or not found by real id, match by sequential order
-      if (targetIndex === -1 && order !== undefined) {
-        targetIndex = prev.rows.findIndex((r) => r.order === order);
-      }
-      // 3. Fallback match by temp id
-      if (targetIndex === -1 && rowId && rowId.startsWith("temp_")) {
+      // Match strictly by unique database ID or temp ID (never clobber by order)
+      if (rowId) {
         targetIndex = prev.rows.findIndex((r) => r.id === rowId);
       }
 
       if (targetIndex !== -1) {
         const existing = prev.rows[targetIndex];
+        const wasEmpty = !isValidLead(existing.data);
+        const nextData = { ...existing.data, [columnId]: sanitizedValue };
+        const isNowValid = isValidLead(nextData);
+
         const nextRows = [...prev.rows];
         nextRows[targetIndex] = {
           ...existing,
-          data: { ...existing.data, [columnId]: sanitizedValue },
+          data: nextData,
+          createdAt: wasEmpty && isNowValid ? new Date().toISOString() : existing.createdAt,
         };
         return {
           ...prev,
@@ -784,21 +781,21 @@ export function SpreadsheetApp() {
       sanitizedRows.forEach((r) => {
         const incomingData = r.data || {};
         let targetIndex = -1;
-        if (r.id && !r.id.startsWith("temp_")) {
-          targetIndex = newRows.findIndex((row) => row.id === r.id);
-        }
-        if (targetIndex === -1 && r.order !== undefined) {
-          targetIndex = newRows.findIndex((row) => row.order === r.order);
-        }
-        if (targetIndex === -1 && r.id && r.id.startsWith("temp_")) {
+        // Strictly match by ID (never clobber by order)
+        if (r.id) {
           targetIndex = newRows.findIndex((row) => row.id === r.id);
         }
 
         if (targetIndex >= 0 && targetIndex < newRows.length) {
           const exist = newRows[targetIndex];
+          const wasEmpty = !isValidLead(exist.data);
+          const nextData = { ...exist.data, ...incomingData };
+          const isNowValid = isValidLead(nextData);
+
           newRows[targetIndex] = {
             ...exist,
-            data: { ...exist.data, ...incomingData },
+            data: nextData,
+            createdAt: wasEmpty && isNowValid ? new Date().toISOString() : exist.createdAt,
           };
         } else {
           const insertOrder = r.order !== undefined ? r.order : newRows.length;
@@ -869,24 +866,32 @@ export function SpreadsheetApp() {
           setActiveSheet((prev) => {
             if (!prev) return prev;
             const tempIdMap = new Map<string, RowData>();
-            const orderMap = new Map<number, RowData>();
 
             createData.created.forEach((r: RowData & { tempId?: string }) => {
               if (r.tempId) tempIdMap.set(r.tempId, r);
-              if (r.order !== undefined) orderMap.set(r.order, r);
+            });
+
+            const matchedTempIds = new Set<string>();
+            const updatedRows = prev.rows.map((r) => {
+              if (r.id && tempIdMap.has(r.id)) {
+                matchedTempIds.add(r.id);
+                return { ...r, ...tempIdMap.get(r.id)! };
+              }
+              return r;
+            });
+
+            // Append any created row that was not matched to an existing temp row
+            createData.created.forEach((r: RowData & { tempId?: string }) => {
+              if (r.tempId && !matchedTempIds.has(r.tempId)) {
+                if (!updatedRows.some((row) => row.id === r.id)) {
+                  updatedRows.push(r);
+                }
+              }
             });
 
             return {
               ...prev,
-              rows: prev.rows.map((r) => {
-                if (r.id && tempIdMap.has(r.id)) {
-                  return { ...r, ...tempIdMap.get(r.id)! };
-                }
-                if (r.id && r.id.startsWith("temp_") && r.order !== undefined && orderMap.has(r.order)) {
-                  return { ...r, ...orderMap.get(r.order)! };
-                }
-                return r;
-              }),
+              rows: updatedRows,
             };
           });
         }

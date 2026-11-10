@@ -464,8 +464,8 @@ export function getRowPhoneNumber(data: Record<string, any> | undefined | null):
  * It never uses updatedAt, last modified date, follow-up dates, or status modification dates.
  *
  * Ground truth hierarchy:
- * 1. Immutable CUID timestamp embedded in row.id if valid CUID (e.g. cmvzh... => timestamp)
- * 2. row.createdAt (if row.id is temp_ or not a CUID)
+ * 1. Direct row.createdAt: The canonical record creation timestamp in the database or optimistic state.
+ * 2. Immutable CUID timestamp embedded in row.id (if row.createdAt is absent and row.id is a CUID).
  */
 export function getLeadAddedDate(
   rowOrCreatedAt: string | Date | RowData | Record<string, any> | undefined | null
@@ -479,19 +479,19 @@ export function getLeadAddedDate(
   if (typeof rowOrCreatedAt === "object") {
     const row = rowOrCreatedAt as any;
 
-    // 1. Immutable CUID timestamp embedded in row.id (c + 8-char base36 timestamp)
+    // 1. Direct canonical createdAt on row takes primary precedence
+    if (row.createdAt) {
+      const d = new Date(row.createdAt);
+      if (!isNaN(d.getTime())) return d;
+    }
+
+    // 2. Fallback to CUID timestamp embedded in row.id (c + 8-char base36 timestamp) if createdAt is absent
     if (typeof row.id === "string" && row.id.startsWith("c") && row.id.length >= 20) {
       const timePart = row.id.substring(1, 9);
       const ts = parseInt(timePart, 36);
       if (!isNaN(ts) && ts > 1700000000000 && ts < 2050000000000) {
         return new Date(ts);
       }
-    }
-
-    // 2. Direct createdAt on row
-    if (row.createdAt) {
-      const d = new Date(row.createdAt);
-      return isNaN(d.getTime()) ? null : d;
     }
 
     return null;
@@ -501,6 +501,13 @@ export function getLeadAddedDate(
     const trimmed = rowOrCreatedAt.trim();
     if (!trimmed) return null;
 
+    // 1. If it's a direct date or ISO string (not a CUID)
+    if (!trimmed.startsWith("c")) {
+      const d = new Date(trimmed);
+      if (!isNaN(d.getTime())) return d;
+    }
+
+    // 2. Fallback: If it's a CUID string (e.g. cmvzh...)
     if (trimmed.startsWith("c") && trimmed.length >= 20) {
       const timePart = trimmed.substring(1, 9);
       const ts = parseInt(timePart, 36);

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { extractPhoneInfo, getRowPhoneNumber, isNameFieldKey, getLeadName } from "@/lib/leads";
+import { extractPhoneInfo, getRowPhoneNumber, isNameFieldKey, getLeadName, isValidLead } from "@/lib/leads";
 
 // Helper to query duplicate phone number across all user sheets
 async function findDuplicateLead(phone: string, excludeRowId?: string) {
@@ -155,7 +155,10 @@ export async function POST(req: Request) {
       const phone = getRowPhoneNumber(dataObj);
       const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
       const leadName = getLeadName(dataObj);
-      const orderToUse = item.order !== undefined ? item.order : startingOrder++;
+      const orderToUse =
+        item.order !== undefined && item.order >= startingOrder
+          ? item.order
+          : startingOrder++;
 
       if (phone && phoneDigits && phoneDigits.length >= 7) {
         // 1. Check duplicate within current paste payload
@@ -201,6 +204,7 @@ export async function POST(req: Request) {
     // Insert all valid rows into Prisma database
     const createdRows = [];
     for (const item of validToCreate) {
+      const now = new Date();
       const row = await prisma.row.create({
         data: {
           sheetId,
@@ -209,7 +213,8 @@ export async function POST(req: Request) {
           phoneDigits: item.phoneDigits || null,
           data: JSON.stringify(item.data),
           styles: typeof item.styles === "string" ? item.styles : JSON.stringify(item.styles || {}),
-          nameModifiedAt: new Date(),
+          nameModifiedAt: now,
+          createdAt: now,
           ...extractFollowupDates(item.data),
         },
       });
@@ -294,6 +299,12 @@ export async function PATCH(req: Request) {
       const newName = getLeadName(mergedData);
       const isNameChanged = oldName !== newName && Object.keys(incomingData).some((k) => isNameFieldKey(k));
 
+      // Check whether existing row was an empty placeholder (contained no valid lead data)
+      // and is now receiving its first valid lead data. If so, assign today's timestamp as its Added Date!
+      const wasEmptyPlaceholder = !isValidLead(currentData);
+      const isNowValidLead = isValidLead(mergedData);
+      const isFirstTimeLeadCreation = wasEmptyPlaceholder && isNowValidLead;
+
       const phone = getRowPhoneNumber(mergedData);
       let skipPhoneUpdate = false;
       if (phone) {
@@ -314,12 +325,14 @@ export async function PATCH(req: Request) {
 
       const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
 
+      const now = new Date();
       const updated = await prisma.row.update({
         where: { id: rowId },
         data: {
           data: JSON.stringify(skipPhoneUpdate ? { ...mergedData, col_number: currentData.col_number || "" } : mergedData),
           ...(skipPhoneUpdate ? {} : { phoneNumber: phoneExact || null, phoneDigits: phoneDigits || null }),
-          ...(isNameChanged ? { nameModifiedAt: new Date() } : {}),
+          ...(isFirstTimeLeadCreation ? { createdAt: now } : {}),
+          ...(isNameChanged || isFirstTimeLeadCreation ? { nameModifiedAt: now } : {}),
           ...extractFollowupDates(mergedData),
           ...(item.styles ? { styles: typeof item.styles === "string" ? item.styles : JSON.stringify(item.styles) } : {}),
           ...(item.order !== undefined ? { order: item.order } : {}),
