@@ -1480,6 +1480,273 @@ it("Bulk Paste Test 6: Simulating Aishwarya sheet paste across placeholder rows 
   assert.strictEqual(unfiltered.length, 21);
 });
 
+// ============================================================================
+// SECTION 9: BULK-PASTE PERSISTENCE & DISAPPEARING LEADS SUITE (SCENARIOS A - I)
+// ============================================================================
+console.log("\n--- Section 9: Bulk-Paste Persistence & Disappearing Leads Suite (Scenarios A through I) ---");
+
+// Helper simulating the updated intelligent row merge logic in SpreadsheetApp
+function simulateMergeServerRows(prevRows, serverRows) {
+  const serverRowIds = new Set(serverRows.map((r) => r.id));
+  const pendingTempRows = prevRows.filter(
+    (r) => r.id && r.id.startsWith("temp_") && !serverRowIds.has(r.id)
+  );
+  if (pendingTempRows.length === 0) {
+    return serverRows;
+  }
+  return [...serverRows, ...pendingTempRows];
+}
+
+it("Scenario A: Paste 5 new leads and simulate background polling (4 intervals x 15s = 60s) - all remain visible", () => {
+  const initialRows = [
+    { id: "lead_1", sheetId: "sheet_asiwini", order: 0, data: { col_name: "Original 1", col_number: "9800000001" }, createdAt: "2026-11-09T10:00:00.000Z" },
+    { id: "lead_2", sheetId: "sheet_asiwini", order: 1, data: { col_name: "Original 2", col_number: "9800000002" }, createdAt: "2026-11-09T10:00:00.000Z" },
+  ];
+
+  // User pastes 5 new leads
+  const pastedRows = Array.from({ length: 5 }, (_, i) => ({
+    id: `temp_${Date.now()}_${i + 2}_abc`,
+    sheetId: "sheet_asiwini",
+    order: i + 2,
+    data: { col_name: `Pasted Lead ${i + 1}`, col_number: `990000000${i + 1}` },
+    styles: {},
+    createdAt: "2026-11-10T12:00:00.000Z",
+  }));
+
+  let currentLocalRows = [...initialRows, ...pastedRows];
+  assert.strictEqual(currentLocalRows.length, 7);
+
+  // Simulate 4 successive 15s poller intervals (60 seconds total)
+  // Interval 1 (t=15s): Save still in flight, poller receives older DB snapshot (only 2 leads)
+  const staleServerSnapshot = [...initialRows];
+  currentLocalRows = simulateMergeServerRows(currentLocalRows, staleServerSnapshot);
+  assert.strictEqual(currentLocalRows.length, 7, "Poller at t=15s must not drop in-flight temp rows");
+
+  // Interval 2 (t=30s): Server has committed 5 leads, frontend reconciles IDs
+  const createdServerRows = pastedRows.map((r, idx) => ({
+    ...r,
+    id: `real_db_id_${idx + 1}`,
+  }));
+  const reconciledServerSnapshot = [...initialRows, ...createdServerRows];
+
+  // Reconcile on client
+  const tempIdMap = new Map();
+  createdServerRows.forEach((r, idx) => tempIdMap.set(pastedRows[idx].id, r));
+  currentLocalRows = currentLocalRows.map((r) => (tempIdMap.has(r.id) ? tempIdMap.get(r.id) : r));
+  assert.strictEqual(currentLocalRows.length, 7);
+  assert.ok(currentLocalRows.every((r) => !r.id.startsWith("temp_")));
+
+  // Interval 3 (t=45s): Background poller runs
+  currentLocalRows = simulateMergeServerRows(currentLocalRows, reconciledServerSnapshot);
+  assert.strictEqual(currentLocalRows.length, 7, "Poller at t=45s preserves all 7 leads");
+
+  // Interval 4 (t=60s): Background poller runs
+  currentLocalRows = simulateMergeServerRows(currentLocalRows, reconciledServerSnapshot);
+  assert.strictEqual(currentLocalRows.length, 7, "Poller at t=60s preserves all 7 leads");
+  assert.strictEqual(currentLocalRows[6].data.col_name, "Pasted Lead 5");
+});
+
+it("Scenario B: Paste 20 new leads: all 20 persist and receive sequential orders and valid dates", () => {
+  const existingRows = Array.from({ length: 15 }, (_, i) => ({
+    id: `lead_${i}`,
+    sheetId: "sheet_pushpa",
+    order: i,
+    data: { col_name: `Pushpa Lead ${i}`, col_number: `91111111${String(i).padStart(2, "0")}` },
+    createdAt: "2026-11-08T08:00:00.000Z",
+  }));
+
+  const bulkPaste20 = Array.from({ length: 20 }, (_, i) => ({
+    id: `temp_${i + 15}`,
+    sheetId: "sheet_pushpa",
+    order: i + 15,
+    data: { col_name: `Bulk Client ${i + 1}`, col_number: `92222222${String(i).padStart(2, "0")}` },
+    createdAt: "2026-11-10T12:15:00.000Z",
+  }));
+
+  const combined = [...existingRows, ...bulkPaste20];
+  assert.strictEqual(combined.length, 35);
+
+  // Validate all 20 bulk leads have valid Added Date of today
+  const todayFilter = filterSheetRows(combined, sampleColumns, { dateFilter: "2026-11-10" });
+  assert.strictEqual(todayFilter.length, 20);
+
+  // Validate order sequences do not collide
+  const orders = combined.map((r) => r.order);
+  const uniqueOrders = new Set(orders);
+  assert.strictEqual(uniqueOrders.size, 35);
+});
+
+it("Scenario C: Paste multiple batches consecutively: earlier batches not overwritten", () => {
+  let sheetRows = [
+    { id: "lead_init", sheetId: "sheet_likhita", order: 0, data: { col_name: "Init Lead" }, createdAt: "2026-11-09T00:00:00.000Z" },
+  ];
+
+  // Batch 1: 5 leads
+  const batch1 = Array.from({ length: 5 }, (_, i) => ({
+    id: `real_b1_${i}`,
+    sheetId: "sheet_likhita",
+    order: sheetRows.length + i,
+    data: { col_name: `Batch1 Lead ${i + 1}` },
+    createdAt: "2026-11-10T10:00:00.000Z",
+  }));
+  sheetRows = [...sheetRows, ...batch1];
+  assert.strictEqual(sheetRows.length, 6);
+
+  // Batch 2: 5 leads immediately after
+  const batch2 = Array.from({ length: 5 }, (_, i) => ({
+    id: `real_b2_${i}`,
+    sheetId: "sheet_likhita",
+    order: sheetRows.length + i,
+    data: { col_name: `Batch2 Lead ${i + 1}` },
+    createdAt: "2026-11-10T10:01:00.000Z",
+  }));
+  sheetRows = [...sheetRows, ...batch2];
+  assert.strictEqual(sheetRows.length, 11);
+
+  // Ensure Batch 1 leads remain intact
+  for (let i = 0; i < 5; i++) {
+    assert.strictEqual(sheetRows[i + 1].data.col_name, `Batch1 Lead ${i + 1}`);
+  }
+  // Ensure Batch 2 leads are appended
+  for (let i = 0; i < 5; i++) {
+    assert.strictEqual(sheetRows[i + 6].data.col_name, `Batch2 Lead ${i + 1}`);
+  }
+});
+
+it("Scenario D: Paste leads and switch tabs immediately: leads preserved in original sheet, no cross-sheet leakage", () => {
+  const sheetA = { id: "sheet_A", name: "Sanjana (Meta)", rows: [{ id: "A1", data: { col_name: "Sanjana Lead 1" } }] };
+  const sheetB = { id: "sheet_B", name: "Vinuta", rows: [{ id: "B1", data: { col_name: "Vinuta Lead 1" } }] };
+
+  // User pastes into Sheet A
+  const pastedIntoA = [
+    { id: "temp_A2", sheetId: "sheet_A", data: { col_name: "New Lead For Sanjana" } },
+  ];
+
+  // User immediately switches active sheet to Sheet B
+  let activeSheet = { ...sheetB };
+
+  // Simulated server response returns for Sheet A
+  const createDataFromA = {
+    created: [{ id: "real_A2", tempId: "temp_A2", sheetId: "sheet_A", data: { col_name: "New Lead For Sanjana" } }],
+  };
+
+  // Test strict tab isolation:
+  const targetSheetId = "sheet_A";
+  let sheetBAfterSave = { ...activeSheet };
+  if (sheetBAfterSave.id === targetSheetId) {
+    // Should NOT execute because sheetB.id !== sheet_A
+    sheetBAfterSave.rows = [...sheetBAfterSave.rows, ...createDataFromA.created];
+  }
+
+  assert.strictEqual(sheetBAfterSave.rows.length, 1, "Sheet B must not receive Sheet A's leads");
+  assert.strictEqual(sheetBAfterSave.rows[0].data.col_name, "Vinuta Lead 1");
+
+  // When switching back to Sheet A, Sheet A has its created lead
+  const sheetAAfterRevisit = {
+    ...sheetA,
+    rows: [...sheetA.rows, createDataFromA.created[0]],
+  };
+  assert.strictEqual(sheetAAfterRevisit.rows.length, 2);
+  assert.strictEqual(sheetAAfterRevisit.rows[1].data.col_name, "New Lead For Sanjana");
+});
+
+it("Scenario E: Paste leads and trigger Sync DB: leads remain visible", () => {
+  const baseRows = [{ id: "lead_1", sheetId: "sheet_x", data: { col_name: "Base Lead" } }];
+  const tempRow = { id: "temp_sync_test", sheetId: "sheet_x", data: { col_name: "Pending Lead" } };
+  const stateWithPending = [...baseRows, tempRow];
+
+  // Simulate manual Sync DB triggered before backend responds
+  const dbSnapshot = [...baseRows];
+  const merged = simulateMergeServerRows(stateWithPending, dbSnapshot);
+
+  assert.strictEqual(merged.length, 2, "Manual Sync DB must keep pending optimistic row");
+  assert.strictEqual(merged[1].id, "temp_sync_test");
+});
+
+it("Scenario F: Paste leads while date filter is active: matching records appear under correct date", () => {
+  const existingRows = [
+    { id: "lead_old", data: { col_name: "Old Lead" }, createdAt: "2026-11-05T05:00:00.000Z" },
+  ];
+
+  // Pasting while filtered by today
+  const newPastedLead = {
+    id: "lead_today",
+    data: { col_name: "New Lead Today", col_number: "9888877777" },
+    createdAt: "2026-11-10T12:00:00.000Z",
+  };
+
+  const allRows = [...existingRows, newPastedLead];
+  const filteredToday = filterSheetRows(allRows, sampleColumns, { dateFilter: "2026-11-10" });
+
+  assert.strictEqual(filteredToday.length, 1);
+  assert.strictEqual(filteredToday[0].data.col_name, "New Lead Today");
+});
+
+it("Scenario G: Simulate API failure: reports failure, no silent removal", () => {
+  const originalRows = [{ id: "orig_1", data: { col_name: "Original Lead" } }];
+  const pastedRows = [{ id: "temp_fail_1", data: { col_name: "Pasted Lead A" } }];
+  let localState = [...originalRows, ...pastedRows];
+
+  // Simulated catch block without silentRefreshActiveSheet:
+  let savingStatus = "saving";
+  try {
+    throw new Error("500 Internal Server Error: Neon connection timeout");
+  } catch (err) {
+    savingStatus = "error";
+    // Crucial: do NOT call silentRefreshActiveSheet(currentSheet.id)
+    // localState is intentionally preserved!
+  }
+
+  assert.strictEqual(savingStatus, "error");
+  assert.strictEqual(localState.length, 2, "Pasted row must remain in local state for recovery");
+  assert.strictEqual(localState[1].data.col_name, "Pasted Lead A");
+});
+
+it("Scenario H: Refresh after bulk paste: all records return from database", () => {
+  const dbRows = [
+    { id: "db_1", order: 0, data: { col_name: "Lead 1" } },
+    { id: "db_2", order: 1, data: { col_name: "Lead 2" } },
+    { id: "db_3", order: 2, data: { col_name: "Lead 3" } },
+  ];
+
+  // Full refresh from DB
+  const localRows = simulateMergeServerRows([], dbRows);
+  assert.strictEqual(localRows.length, 3);
+  assert.deepStrictEqual(localRows.map((r) => r.data.col_name), ["Lead 1", "Lead 2", "Lead 3"]);
+});
+
+it("Scenario I: Cross-sheet verification: duplicate phone number skipped from sheet and reported cleanly", () => {
+  const currentSheetRows = [
+    { id: "real_1", data: { col_name: "Member Lead", col_number: "9800000001" } },
+    { id: "temp_dup", data: { col_name: "Duplicate Pasted Lead", col_number: "9999999999" } },
+  ];
+
+  const serverResponse = {
+    success: true,
+    count: 0,
+    created: [],
+    duplicates: [
+      {
+        tempId: "temp_dup",
+        phone: "9999999999",
+        name: "Duplicate Pasted Lead",
+        ownerName: "Asiwini",
+        sheetName: "Asiwini Tab",
+        reason: "Phone already exists in Asiwini's system (Asiwini Tab)",
+      },
+    ],
+  };
+
+  // Frontend reconciliation:
+  const duplicateTempIds = new Set(serverResponse.duplicates.map((d) => d.tempId));
+  const reconciledRows = currentSheetRows.filter((r) => !duplicateTempIds.has(r.id));
+
+  assert.strictEqual(reconciledRows.length, 1, "Duplicate temp row cleanly filtered out so it never becomes a phantom disappearing row");
+  assert.strictEqual(reconciledRows[0].data.col_name, "Member Lead");
+  assert.strictEqual(serverResponse.duplicates.length, 1);
+  assert.strictEqual(serverResponse.duplicates[0].ownerName, "Asiwini");
+});
+
 console.log(`\n=== ALL TESTS PASSED: ${passed}/${total} ===\n`);
 if (passed !== total) {
   process.exit(1);

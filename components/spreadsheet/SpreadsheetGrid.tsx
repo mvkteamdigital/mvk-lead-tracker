@@ -41,6 +41,7 @@ interface SpreadsheetGridProps {
   searchQuery: string;
   statusFilter?: string | null;
   dateFilter?: string | null;
+  onClearFilters?: () => void;
   onUndo?: () => void;
   onRedo?: () => void;
   canUndo?: boolean;
@@ -470,6 +471,7 @@ export function SpreadsheetGrid({
   searchQuery,
   statusFilter = null,
   dateFilter = null,
+  onClearFilters,
   onUndo,
   onRedo,
   canUndo,
@@ -1365,6 +1367,12 @@ export function SpreadsheetGrid({
         });
       });
 
+      // If user pastes while filters are active, clear the filters immediately
+      // so the newly pasted rows are placed and visible in the true full sheet
+      if (isFiltered && onClearFilters) {
+        onClearFilters();
+      }
+
       // Determine starting coordinates from currently focused cell
       const startRowIndex = currentActive.rowIdx;
       let startColIndex = currentSheet.columns.findIndex((c) => c.id === currentActive.colId);
@@ -1499,6 +1507,8 @@ export function SpreadsheetGrid({
       getRowAtIndex,
       onUpdateCell,
       onBatchUpdateRows,
+      isFiltered,
+      onClearFilters,
     ]
   );
 

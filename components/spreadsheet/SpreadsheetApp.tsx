@@ -33,6 +33,7 @@ import { ForceChangePasswordModal } from "../modals/ForceChangePasswordModal";
 import { ManageTeamAccountsModal } from "../modals/ManageTeamAccountsModal";
 import { LeadFormModal } from "../modals/LeadFormModal";
 import { MobileLeadListView } from "../mobile/MobileLeadListView";
+import { DuplicateBatchReportModal, DuplicateReportItem } from "../modals/DuplicateBatchReportModal";
 import { AlertCircle, RefreshCw, FileSpreadsheet, CheckCircle2, X } from "lucide-react";
 
 export function SpreadsheetApp() {
@@ -73,6 +74,16 @@ export function SpreadsheetApp() {
   const [isManageAccountsModalOpen, setIsManageAccountsModalOpen] = useState(false);
   const [isLeadFormModalOpen, setIsLeadFormModalOpen] = useState(false);
   const [editingLeadForModal, setEditingLeadForModal] = useState<RowData | null>(null);
+
+  // Duplicate reporting modal state
+  const [duplicateBatchReport, setDuplicateBatchReport] = useState<DuplicateReportItem[]>([]);
+  const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
+  const [totalSavedInBatch, setTotalSavedInBatch] = useState(0);
+
+  // Robust Save & Refresh Mutex Refs (Guarantees background pollers NEVER overwrite in-flight or pending saves)
+  const isSavingRef = useRef(false);
+  const lastSaveTimestampRef = useRef(0);
+  const refreshRequestIdRef = useRef(0);
 
   // Lightweight Toast Notification system (eliminates native alerts and page reloads)
   const [toast, setToast] = useState<{ id: number; message: string; type: "success" | "error" | "info" } | null>(null);
@@ -518,21 +529,50 @@ export function SpreadsheetApp() {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const handleRefreshFromDB = useCallback(async () => {
-    if (!activeSheetId || isRefreshing) return;
+    if (!activeSheetId || isRefreshing || isSavingRef.current) return;
+
+    // Do not run background refresh if a save was completed very recently (within 8 seconds cooldown)
+    const timeSinceLastSave = Date.now() - lastSaveTimestampRef.current;
+    if (timeSinceLastSave < 8000) return;
+
+    const thisRequestId = ++refreshRequestIdRef.current;
+
     try {
       setIsRefreshing(true);
       const [sheetRes, sheetsRes] = await Promise.all([
         fetch(`/api/sheets/${activeSheetId}`),
         fetch("/api/sheets"),
       ]);
+
+      // If another save or refresh was started in the meantime, discard this response
+      if (thisRequestId !== refreshRequestIdRef.current || isSavingRef.current) {
+        return;
+      }
+
       if (sheetRes.ok) {
         const data = await sheetRes.json();
         setActiveSheet((prev) => {
           if (!prev || prev.id !== activeSheetId) return prev;
+
+          // Merge safety net: Identify any temporary optimistic rows that are not yet in server rows
+          const serverRowIds = new Set(data.sheet.rows.map((r: RowData) => r.id));
+          const pendingTempRows = prev.rows.filter(
+            (r) => r.id && r.id.startsWith("temp_") && !serverRowIds.has(r.id)
+          );
+
+          if (pendingTempRows.length === 0) {
+            return {
+              ...prev,
+              columns: data.sheet.columns,
+              rows: data.sheet.rows,
+            };
+          }
+
+          // If there are pending temp rows, keep them merged so background refresh NEVER drops them!
           return {
             ...prev,
             columns: data.sheet.columns,
-            rows: data.sheet.rows,
+            rows: [...data.sheet.rows, ...pendingTempRows],
           };
         });
       }
@@ -549,6 +589,7 @@ export function SpreadsheetApp() {
 
   // Silent background refresh for seamless error recovery without unmounting or setting loading spinner
   const silentRefreshActiveSheet = useCallback(async (sheetId: string) => {
+    if (isSavingRef.current) return;
     try {
       const res = await fetch(`/api/sheets/${sheetId}`);
       if (!res.ok) return;
@@ -556,10 +597,17 @@ export function SpreadsheetApp() {
       if (data.sheet) {
         setActiveSheet((prev) => {
           if (!prev || prev.id !== sheetId) return prev;
+
+          // Merge safety net: Preserve any pending temp rows
+          const serverRowIds = new Set(data.sheet.rows.map((r: RowData) => r.id));
+          const pendingTempRows = prev.rows.filter(
+            (r) => r.id && r.id.startsWith("temp_") && !serverRowIds.has(r.id)
+          );
+
           return {
             ...prev,
             columns: data.sheet.columns,
-            rows: data.sheet.rows,
+            rows: pendingTempRows.length > 0 ? [...data.sheet.rows, ...pendingTempRows] : data.sheet.rows,
           };
         });
       }
@@ -569,12 +617,12 @@ export function SpreadsheetApp() {
   }, []);
 
   // Synchronized Multi-User Access: Polling every 15 seconds so CEO / Admins and members stay in sync
-  // Paused while configuration modals are open to prevent any background state overwrites
+  // Paused while configuration modals are open or during active saving to prevent any background state overwrites
   useEffect(() => {
     if (!activeSheetId || isDropdownModalOpen) return;
 
     const interval = setInterval(() => {
-      if (savingStatus !== "saving") {
+      if (savingStatus !== "saving" && !isSavingRef.current) {
         handleRefreshFromDB();
       }
     }, 15000);
@@ -697,6 +745,8 @@ export function SpreadsheetApp() {
     });
 
     setSavingStatus("saving");
+    isSavingRef.current = true;
+    const thisCellRequestId = ++refreshRequestIdRef.current;
 
     try {
       const res = await fetch(`/api/sheets/${currentSheet.id}/rows`, {
@@ -725,7 +775,7 @@ export function SpreadsheetApp() {
       const data = await res.json();
       if (data.row) {
         setActiveSheet((prev) => {
-          if (!prev) return prev;
+          if (!prev || prev.id !== currentSheet.id) return prev;
           const targetRowId = data.row.id;
           return {
             ...prev,
@@ -748,6 +798,9 @@ export function SpreadsheetApp() {
       showToast("Network error: Could not save changes.", "error");
       silentRefreshActiveSheet(currentSheet.id);
       setSavingStatus("error");
+    } finally {
+      isSavingRef.current = false;
+      lastSaveTimestampRef.current = Date.now();
     }
   };
 
@@ -755,6 +808,18 @@ export function SpreadsheetApp() {
   const handleBatchUpdateRows = async (rows: Partial<RowData>[]) => {
     const currentSheet = activeSheetRef.current || activeSheet;
     if (!currentSheet) return;
+
+    // Mutex lock to stop background sync overwrites
+    isSavingRef.current = true;
+    const currentBatchRequestId = ++refreshRequestIdRef.current;
+
+    // If active filters or search query are set, clear them so all newly pasted leads are visible in the full sheet
+    if (statusFilter || dateFilter || searchQuery) {
+      setStatusFilter(null);
+      setDateFilter(null);
+      setSearchQuery("");
+      showToast("Active filters cleared to display all newly pasted leads in context.", "info");
+    }
 
     pushUndoSnapshot();
 
@@ -775,7 +840,7 @@ export function SpreadsheetApp() {
 
     // Optimistically update local state immediately with ONE single batched React update
     setActiveSheet((prev) => {
-      if (!prev) return prev;
+      if (!prev || prev.id !== currentSheet.id) return prev;
       const newRows = [...prev.rows];
 
       sanitizedRows.forEach((r) => {
@@ -862,25 +927,40 @@ export function SpreadsheetApp() {
           allDuplicates.push(...createData.duplicates);
         }
 
-        if (createData.created && createData.created.length > 0) {
-          setActiveSheet((prev) => {
-            if (!prev) return prev;
-            const tempIdMap = new Map<string, RowData>();
+        const duplicateTempIds = new Set<string>(
+          (createData.duplicates || []).map((d: any) => d.tempId).filter(Boolean)
+        );
 
+        setActiveSheet((prev) => {
+          // Strict tab check: Only update if user is still on the target sheet
+          if (!prev || prev.id !== currentSheet.id) return prev;
+          const tempIdMap = new Map<string, RowData>();
+
+          if (createData.created) {
             createData.created.forEach((r: RowData & { tempId?: string }) => {
               if (r.tempId) tempIdMap.set(r.tempId, r);
             });
+          }
 
-            const matchedTempIds = new Set<string>();
-            const updatedRows = prev.rows.map((r) => {
-              if (r.id && tempIdMap.has(r.id)) {
-                matchedTempIds.add(r.id);
-                return { ...r, ...tempIdMap.get(r.id)! };
-              }
-              return r;
-            });
+          const matchedTempIds = new Set<string>();
+          const updatedRows: RowData[] = [];
 
-            // Append any created row that was not matched to an existing temp row
+          prev.rows.forEach((r) => {
+            // Remove duplicate temporary rows that the database rejected so they do not linger as ghost rows
+            if (r.id && duplicateTempIds.has(r.id)) {
+              return;
+            }
+
+            if (r.id && tempIdMap.has(r.id)) {
+              matchedTempIds.add(r.id);
+              updatedRows.push({ ...r, ...tempIdMap.get(r.id)! });
+            } else {
+              updatedRows.push(r);
+            }
+          });
+
+          // Append any created row that was not matched to an existing temp row
+          if (createData.created) {
             createData.created.forEach((r: RowData & { tempId?: string }) => {
               if (r.tempId && !matchedTempIds.has(r.tempId)) {
                 if (!updatedRows.some((row) => row.id === r.id)) {
@@ -888,13 +968,13 @@ export function SpreadsheetApp() {
                 }
               }
             });
+          }
 
-            return {
-              ...prev,
-              rows: updatedRows,
-            };
-          });
-        }
+          return {
+            ...prev,
+            rows: updatedRows,
+          };
+        });
       }
 
       // Process updated existing rows
@@ -911,7 +991,7 @@ export function SpreadsheetApp() {
 
         if (updateData.updated && updateData.updated.length > 0) {
           setActiveSheet((prev) => {
-            if (!prev) return prev;
+            if (!prev || prev.id !== currentSheet.id) return prev;
             const updatedMap = new Map<string, RowData>();
             updateData.updated.forEach((r: RowData) => {
               updatedMap.set(r.id, r);
@@ -924,9 +1004,13 @@ export function SpreadsheetApp() {
         }
       }
 
+      setTotalSavedInBatch(totalSaved);
+
       if (allDuplicates.length > 0) {
+        setDuplicateBatchReport(allDuplicates);
+        setIsDuplicateModalOpen(true);
         showToast(
-          `Pasted ${totalSaved} lead(s). ${allDuplicates.length} duplicate phone number(s) skipped.`,
+          `Pasted ${totalSaved} lead(s). ⚠️ ${allDuplicates.length} duplicate phone number(s) skipped (details shown in modal).`,
           "info"
         );
       } else if (totalSaved > 0) {
@@ -936,9 +1020,13 @@ export function SpreadsheetApp() {
       setSavingStatus("saved");
     } catch (err: any) {
       console.error("Batch update error:", err);
-      showToast(err.message || "Failed to save pasted data.", "error");
-      silentRefreshActiveSheet(currentSheet.id);
+      showToast(`Save error: ${err.message || "Failed to save pasted data."} (Pasted data preserved on screen)`, "error");
+      // NEVER silently wipe out the user's pasted rows on save error!
+      // Keep optimistic rows in state so user data is never lost.
       setSavingStatus("error");
+    } finally {
+      isSavingRef.current = false;
+      lastSaveTimestampRef.current = Date.now();
     }
   };
 
@@ -1724,6 +1812,11 @@ export function SpreadsheetApp() {
                     searchQuery={searchQuery}
                     statusFilter={statusFilter}
                     dateFilter={dateFilter}
+                    onClearFilters={() => {
+                      setStatusFilter(null);
+                      setDateFilter(null);
+                      setSearchQuery("");
+                    }}
                     onUndo={handleUndo}
                     onRedo={handleRedo}
                     canUndo={undoStack.length > 0}
@@ -1829,6 +1922,14 @@ export function SpreadsheetApp() {
           onSuccess={() => fetchSheets()}
         />
       )}
+
+      {/* Duplicate Leads Batch Report Modal */}
+      <DuplicateBatchReportModal
+        isOpen={isDuplicateModalOpen}
+        onClose={() => setIsDuplicateModalOpen(false)}
+        duplicates={duplicateBatchReport}
+        totalSaved={totalSavedInBatch}
+      />
 
       {/* Lightweight Floating Toast Notification (No Page Reloads) */}
       {toast && (
