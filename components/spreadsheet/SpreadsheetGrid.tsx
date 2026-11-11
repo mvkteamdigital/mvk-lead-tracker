@@ -571,15 +571,48 @@ export function SpreadsheetGrid({
     });
   }, [sheet.rows, sheet.columns, isFiltered, dateFilter, statusFilter, searchQuery]);
 
+  // Stable map of sheet rows indexed by their row order
+  const orderToRowMap = useMemo(() => {
+    const map = new Map<number, RowData>();
+    const unassigned: RowData[] = [];
+    for (const row of sheet.rows) {
+      if (typeof row.order === "number" && row.order >= 0) {
+        if (!map.has(row.order)) {
+          map.set(row.order, row);
+        } else {
+          unassigned.push(row);
+        }
+      } else {
+        unassigned.push(row);
+      }
+    }
+    // Safety fallback for unassigned or duplicate rows
+    let nextIdx = 0;
+    for (const row of unassigned) {
+      while (map.has(nextIdx)) {
+        nextIdx++;
+      }
+      map.set(nextIdx, row);
+      nextIdx++;
+    }
+    return map;
+  }, [sheet.rows]);
+
   // Total row count: in filtered mode, matches filtered rows count; in normal mode, at least 1,000 blank rows
   const totalRowCount = useMemo(() => {
     if (isFiltered) {
       return filteredRows.length;
     }
-    return Math.max(1000, sheet.rows.length + 10, expandedRowCount);
-  }, [isFiltered, filteredRows.length, sheet.rows.length, expandedRowCount]);
+    let maxOrder = 0;
+    for (const r of sheet.rows) {
+      if (typeof r.order === "number" && r.order > maxOrder) {
+        maxOrder = r.order;
+      }
+    }
+    return Math.max(1000, maxOrder + 50, sheet.rows.length + 10, expandedRowCount);
+  }, [isFiltered, filteredRows.length, sheet.rows, expandedRowCount]);
 
-  // Helper to get row data at index without relying on colliding order fields
+  // Helper to get row data at index: uses stable order mapping so row positions are fixed like Google Sheets
   const getRowAtIndex = useCallback(
     (index: number): RowData => {
       if (isFiltered) {
@@ -594,8 +627,9 @@ export function SpreadsheetGrid({
           styles: {},
         };
       }
-      if (index >= 0 && index < sheet.rows.length) {
-        return sheet.rows[index];
+      const existing = orderToRowMap.get(index);
+      if (existing) {
+        return existing;
       }
       return {
         id: `temp_${index}`,
@@ -605,7 +639,7 @@ export function SpreadsheetGrid({
         styles: {},
       };
     },
-    [isFiltered, filteredRows, sheet.rows, sheet.id]
+    [isFiltered, filteredRows, orderToRowMap, sheet.id]
   );
 
   // Dynamic windowing calculations with ResizeObserver

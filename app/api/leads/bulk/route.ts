@@ -139,7 +139,11 @@ export async function POST(req: Request) {
 
     const lastRow = await prisma.row.findFirst({
       where: { sheetId },
-      orderBy: { order: "desc" },
+      orderBy: [
+        { order: "desc" },
+        { createdAt: "desc" },
+        { id: "desc" },
+      ],
       select: { order: true },
     });
     let startingOrder = (lastRow?.order ?? -1) + 1;
@@ -155,8 +159,12 @@ export async function POST(req: Request) {
       const phone = getRowPhoneNumber(dataObj);
       const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
       const leadName = getLeadName(dataObj);
+
+      // PREDICTABLE GOOGLE SHEETS POSITIONING:
+      // If the client specified a specific row position (item.order), preserve that exact row position.
+      // If omitted, append at startingOrder.
       const orderToUse =
-        item.order !== undefined && item.order >= startingOrder
+        item.order !== undefined && item.order !== null && typeof item.order === "number"
           ? item.order
           : startingOrder++;
 
@@ -201,6 +209,27 @@ export async function POST(req: Request) {
         data: dataObj,
         styles: item.styles,
       });
+    }
+
+    // Check if newly created rows specify order positions that overlap with existing records in this sheet
+    // If so, shift existing records down atomically so no two records collide and relative order is preserved
+    const specifiedOrders = validToCreate
+      .map((item) => item.order)
+      .filter((o) => typeof o === "number");
+
+    if (specifiedOrders.length > 0) {
+      const minNewOrder = Math.min(...specifiedOrders);
+      const collidingCount = await prisma.row.count({
+        where: { sheetId, order: { gte: minNewOrder } },
+      });
+
+      if (collidingCount > 0) {
+        // Shift existing rows down atomically to make space for the new rows
+        await prisma.row.updateMany({
+          where: { sheetId, order: { gte: minNewOrder } },
+          data: { order: { increment: validToCreate.length } },
+        });
+      }
     }
 
     // Insert all valid rows into Prisma database inside batched transactions (chunks of 25)
@@ -349,7 +378,7 @@ export async function PATCH(req: Request) {
           ...(isNameChanged || isFirstTimeLeadCreation ? { nameModifiedAt: now } : {}),
           ...extractFollowupDates(mergedData),
           ...(item.styles ? { styles: typeof item.styles === "string" ? item.styles : JSON.stringify(item.styles) } : {}),
-          ...(item.order !== undefined ? { order: item.order } : {}),
+          ...(item.order !== undefined && item.order !== null ? { order: item.order } : {}),
         },
       });
 

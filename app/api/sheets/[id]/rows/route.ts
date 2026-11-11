@@ -237,7 +237,11 @@ export async function PUT(req: Request, { params }: Params) {
 
       const updatedRows = await prisma.row.findMany({
         where: { sheetId },
-        orderBy: { order: "asc" },
+        orderBy: [
+          { order: "asc" },
+          { createdAt: "asc" },
+          { id: "asc" },
+        ],
       });
 
       return NextResponse.json({
@@ -332,7 +336,20 @@ export async function PUT(req: Request, { params }: Params) {
       });
       const nextOrder = (lastRow?.order ?? -1) + 1;
       const orderVal =
-        body.order !== undefined && body.order >= nextOrder ? body.order : nextOrder;
+        body.order !== undefined && body.order !== null && typeof body.order === "number"
+          ? body.order
+          : nextOrder;
+
+      // If inserting at an order that already exists, shift colliding rows down
+      const colliding = await prisma.row.count({
+        where: { sheetId, order: orderVal },
+      });
+      if (colliding > 0) {
+        await prisma.row.updateMany({
+          where: { sheetId, order: { gte: orderVal } },
+          data: { order: { increment: 1 } },
+        });
+      }
 
       const initialData = { [body.columnId]: body.value };
       const phone = getRowPhoneNumber(initialData);

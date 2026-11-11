@@ -112,7 +112,11 @@ export async function GET(req: Request, { params }: Params) {
           select: { id: true, name: true, email: true, role: true },
         },
         rows: {
-          orderBy: { order: "asc" },
+          orderBy: [
+            { order: "asc" },
+            { createdAt: "asc" },
+            { id: "asc" },
+          ],
         },
       },
     });

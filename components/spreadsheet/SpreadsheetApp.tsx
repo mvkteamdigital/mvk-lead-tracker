@@ -560,19 +560,13 @@ export function SpreadsheetApp() {
             (r) => r.id && r.id.startsWith("temp_") && !serverRowIds.has(r.id)
           );
 
-          if (pendingTempRows.length === 0) {
-            return {
-              ...prev,
-              columns: data.sheet.columns,
-              rows: data.sheet.rows,
-            };
-          }
+          const allRows = pendingTempRows.length > 0 ? [...data.sheet.rows, ...pendingTempRows] : [...data.sheet.rows];
+          allRows.sort((a: RowData, b: RowData) => (a.order ?? 0) - (b.order ?? 0));
 
-          // If there are pending temp rows, keep them merged so background refresh NEVER drops them!
           return {
             ...prev,
             columns: data.sheet.columns,
-            rows: [...data.sheet.rows, ...pendingTempRows],
+            rows: allRows,
           };
         });
       }
@@ -604,10 +598,13 @@ export function SpreadsheetApp() {
             (r) => r.id && r.id.startsWith("temp_") && !serverRowIds.has(r.id)
           );
 
+          const allRows = pendingTempRows.length > 0 ? [...data.sheet.rows, ...pendingTempRows] : [...data.sheet.rows];
+          allRows.sort((a: RowData, b: RowData) => (a.order ?? 0) - (b.order ?? 0));
+
           return {
             ...prev,
             columns: data.sheet.columns,
-            rows: pendingTempRows.length > 0 ? [...data.sheet.rows, ...pendingTempRows] : data.sheet.rows,
+            rows: allRows,
           };
         });
       }
@@ -650,12 +647,14 @@ export function SpreadsheetApp() {
       }
     }
 
-    // 3. Fallback: match by rendered index or sequential order
+    // 3. Fallback: match by sequential row order first, then array index
     const row =
-      activeSheet.rows[activeCell.rowIdx] ||
       activeSheet.rows.find(
         (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
-      );
+      ) ||
+      (activeCell.rowIdx >= 0 && activeCell.rowIdx < activeSheet.rows.length
+        ? activeSheet.rows[activeCell.rowIdx]
+        : undefined);
     if (!row) return "";
     return row.data[activeCell.colId] || "";
   };
@@ -680,12 +679,14 @@ export function SpreadsheetApp() {
       }
     }
 
-    // 3. Fallback
+    // 3. Fallback: match by sequential row order first, then array index
     const row =
-      activeSheet.rows[activeCell.rowIdx] ||
       activeSheet.rows.find(
         (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
-      );
+      ) ||
+      (activeCell.rowIdx >= 0 && activeCell.rowIdx < activeSheet.rows.length
+        ? activeSheet.rows[activeCell.rowIdx]
+        : undefined);
     if (!row || !row.styles) return {};
     return row.styles[activeCell.colId] || {};
   };
@@ -706,9 +707,12 @@ export function SpreadsheetApp() {
       if (!prev) return prev;
       let targetIndex = -1;
 
-      // Match strictly by unique database ID or temp ID (never clobber by order)
+      // Match strictly by unique database ID or temp ID
       if (rowId) {
         targetIndex = prev.rows.findIndex((r) => r.id === rowId);
+      }
+      if (targetIndex === -1 && rowOrder !== undefined) {
+        targetIndex = prev.rows.findIndex((r) => r.order === rowOrder);
       }
 
       if (targetIndex !== -1) {
@@ -738,9 +742,11 @@ export function SpreadsheetApp() {
         styles: {},
         createdAt: new Date().toISOString(),
       };
+      const nextRows = [...prev.rows, newRow];
+      nextRows.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
       return {
         ...prev,
-        rows: [...prev.rows, newRow],
+        rows: nextRows,
       };
     });
 
@@ -846,9 +852,12 @@ export function SpreadsheetApp() {
       sanitizedRows.forEach((r) => {
         const incomingData = r.data || {};
         let targetIndex = -1;
-        // Strictly match by ID (never clobber by order)
+        // Strictly match by ID
         if (r.id) {
           targetIndex = newRows.findIndex((row) => row.id === r.id);
+        }
+        if (targetIndex === -1 && r.order !== undefined) {
+          targetIndex = newRows.findIndex((row) => row.order === r.order);
         }
 
         if (targetIndex >= 0 && targetIndex < newRows.length) {
@@ -874,6 +883,8 @@ export function SpreadsheetApp() {
           });
         }
       });
+
+      newRows.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
 
       return {
         ...prev,
@@ -970,6 +981,8 @@ export function SpreadsheetApp() {
             });
           }
 
+          updatedRows.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
           return {
             ...prev,
             rows: updatedRows,
@@ -1042,10 +1055,12 @@ export function SpreadsheetApp() {
       (isFiltered && currentFilteredRows.length > 0
         ? currentFilteredRows[activeCell.rowIdx]
         : null) ||
-      activeSheet.rows[activeCell.rowIdx] ||
       activeSheet.rows.find(
         (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
-      );
+      ) ||
+      (activeCell.rowIdx >= 0 && activeCell.rowIdx < activeSheet.rows.length
+        ? activeSheet.rows[activeCell.rowIdx]
+        : undefined);
     if (!row) return;
 
     const currentStyle = (row.styles && row.styles[activeCell.colId]) || {};
@@ -1609,7 +1624,7 @@ export function SpreadsheetApp() {
   useEffect(() => {
     if (!activeSheet || !activeCell) return;
 
-    // Resolve target row via activeCell.rowId or filtered position
+    // Resolve target row via activeCell.rowId, filtered position, or order
     const targetRow =
       (activeCell.rowId && !activeCell.rowId.startsWith("temp_")
         ? activeSheet.rows.find((r) => r.id === activeCell.rowId)
@@ -1617,7 +1632,10 @@ export function SpreadsheetApp() {
       (isFiltered && currentFilteredRows.length > 0
         ? currentFilteredRows[activeCell.rowIdx]
         : null) ||
-      activeSheet.rows[activeCell.rowIdx];
+      activeSheet.rows.find((r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx) ||
+      (activeCell.rowIdx >= 0 && activeCell.rowIdx < activeSheet.rows.length
+        ? activeSheet.rows[activeCell.rowIdx]
+        : null);
 
     if (!targetRow) return;
 
@@ -1726,10 +1744,12 @@ export function SpreadsheetApp() {
                 (isFiltered && currentFilteredRows.length > 0
                   ? currentFilteredRows[activeCell.rowIdx]
                   : null) ||
-                activeSheet.rows[activeCell.rowIdx] ||
                 activeSheet.rows.find(
                   (r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx
-                );
+                ) ||
+                (activeCell.rowIdx >= 0 && activeCell.rowIdx < activeSheet.rows.length
+                  ? activeSheet.rows[activeCell.rowIdx]
+                  : null);
 
               const rowId = row?.id || activeCell.rowId || `temp_${activeCell.rowIdx}`;
               const rowOrder = row?.order !== undefined ? row.order : activeCell.rowIdx;

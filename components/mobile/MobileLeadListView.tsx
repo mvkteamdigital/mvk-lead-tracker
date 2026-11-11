@@ -311,13 +311,14 @@ export function MobileLeadListView({
   onUpdateLead,
 }: MobileLeadListViewProps) {
   // Filter only rows that have actual valid lead data (name, number, project, or other non-empty field)
-  // in their default sequential order as returned from the database
+  // in their strict sequential row order as returned from the database
   const leads = useMemo(() => {
-    return filterSheetRows(sheet.rows, sheet.columns, {
+    const list = filterSheetRows(sheet.rows, sheet.columns, {
       dateFilter,
       statusFilter,
       searchQuery,
     });
+    return [...list].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   }, [sheet.rows, sheet.columns, searchQuery, statusFilter, dateFilter]);
 
   return (

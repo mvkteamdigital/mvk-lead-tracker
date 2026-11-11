@@ -96,7 +96,11 @@ export async function GET(req: Request) {
   // If no phone check query, return accessible leads in default order
   const leads = await prisma.row.findMany({
     where: user.role === "ADMIN" ? {} : { sheet: { userId: user.id } },
-    orderBy: { order: "asc" },
+    orderBy: [
+      { order: "asc" },
+      { createdAt: "asc" },
+      { id: "asc" },
+    ],
     include: {
       sheet: {
         select: { id: true, name: true, userId: true },
@@ -135,7 +139,11 @@ export async function POST(req: Request) {
     if (!sheetId && body.userId) {
       const targetUserSheet = await prisma.sheet.findFirst({
         where: { userId: body.userId },
-        orderBy: { order: "asc" },
+        orderBy: [
+      { order: "asc" },
+      { createdAt: "asc" },
+      { id: "asc" },
+    ],
       });
       if (targetUserSheet) {
         sheetId = targetUserSheet.id;
@@ -146,7 +154,11 @@ export async function POST(req: Request) {
     if (!sheetId) {
       const userSheet = await prisma.sheet.findFirst({
         where: user.role === "ADMIN" ? {} : { userId: user.id },
-        orderBy: { order: "asc" },
+        orderBy: [
+      { order: "asc" },
+      { createdAt: "asc" },
+      { id: "asc" },
+    ],
       });
       if (!userSheet) {
         return NextResponse.json(

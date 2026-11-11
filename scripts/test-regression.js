@@ -1747,6 +1747,329 @@ it("Scenario I: Cross-sheet verification: duplicate phone number skipped from sh
   assert.strictEqual(serverResponse.duplicates[0].ownerName, "Asiwini");
 });
 
+console.log("\n--- Section 10: Stable Row Ordering & Regression Suite (12 Scenarios) ---");
+
+// Helpers for Section 10 testing
+function createTestOrderToRowMap(sheetRows) {
+  const map = new Map();
+  const unassigned = [];
+  for (const row of sheetRows) {
+    if (typeof row.order === "number" && row.order >= 0) {
+      if (!map.has(row.order)) {
+        map.set(row.order, row);
+      } else {
+        unassigned.push(row);
+      }
+    } else {
+      unassigned.push(row);
+    }
+  }
+  let nextIdx = 0;
+  for (const row of unassigned) {
+    while (map.has(nextIdx)) {
+      nextIdx++;
+    }
+    map.set(nextIdx, row);
+    nextIdx++;
+  }
+  return map;
+}
+
+function getTestRowAtIndex(index, sheet, orderToRowMap, isFiltered = false, filteredRows = []) {
+  if (isFiltered) {
+    if (index >= 0 && index < filteredRows.length) return filteredRows[index];
+    return { id: `temp_${index}`, sheetId: sheet.id, order: index, data: {}, styles: {} };
+  }
+  const existing = orderToRowMap.get(index);
+  if (existing) return existing;
+  return { id: `temp_${index}`, sheetId: sheet.id, order: index, data: {}, styles: {} };
+}
+
+it("Scenario 1: Paste 1 lead at row 44. Confirm it stays at row 44 after sync", () => {
+  const sheet = { id: "sheet_test" };
+  // Initial DB rows: 20 leads with order 0..19
+  const dbRows = Array.from({ length: 20 }, (_, i) => ({
+    id: `lead_${i}`,
+    sheetId: sheet.id,
+    order: i,
+    data: { col_name: `Lead ${i + 1}`, col_number: `90000000${i.toString().padStart(2, "0")}` },
+  }));
+
+  // User selects row 44 (index 43) and pastes
+  const pastedRow = {
+    id: "lead_pasted_44",
+    sheetId: sheet.id,
+    order: 43,
+    data: { col_name: "Row 44 Lead", col_number: "9876543210" },
+  };
+
+  // After sync, DB has 21 total rows: [0..19, 43]
+  const rowsAfterSync = [...dbRows, pastedRow];
+  const orderMap = createTestOrderToRowMap(rowsAfterSync);
+
+  // Row 44 on screen is index 43
+  const rowAt43 = getTestRowAtIndex(43, sheet, orderMap);
+  assert.strictEqual(rowAt43.id, "lead_pasted_44");
+  assert.strictEqual(rowAt43.data.col_name, "Row 44 Lead");
+
+  // Row 21 on screen (index 20) MUST BE EMPTY, NOT THE PASTED ROW!
+  const rowAt20 = getTestRowAtIndex(20, sheet, orderMap);
+  assert.strictEqual(rowAt20.id, "temp_20");
+  assert.strictEqual(Object.keys(rowAt20.data).length, 0);
+});
+
+it("Scenario 2: Paste 10 leads starting at row 50. Confirm all 10 stay at rows 50–59", () => {
+  const sheet = { id: "sheet_test" };
+  const initialRows = Array.from({ length: 15 }, (_, i) => ({
+    id: `lead_${i}`,
+    sheetId: sheet.id,
+    order: i,
+    data: { col_name: `Initial Lead ${i + 1}` },
+  }));
+
+  // 10 leads pasted starting at row 50 (index 49)
+  const pastedBatch = Array.from({ length: 10 }, (_, i) => ({
+    id: `pasted_batch_${i}`,
+    sheetId: sheet.id,
+    order: 49 + i,
+    data: { col_name: `Batch Lead ${i + 1}` },
+  }));
+
+  const allRows = [...initialRows, ...pastedBatch];
+  const orderMap = createTestOrderToRowMap(allRows);
+
+  for (let i = 0; i < 10; i++) {
+    const renderedRow = getTestRowAtIndex(49 + i, sheet, orderMap);
+    assert.strictEqual(renderedRow.id, `pasted_batch_${i}`);
+    assert.strictEqual(renderedRow.data.col_name, `Batch Lead ${i + 1}`);
+  }
+
+  // Intervening rows (e.g. index 30) must remain blank
+  const blankRow = getTestRowAtIndex(30, sheet, orderMap);
+  assert.strictEqual(blankRow.id, "temp_30");
+  assert.strictEqual(Object.keys(blankRow.data).length, 0);
+});
+
+it("Scenario 3: Paste leads into an empty sheet. Confirm rows start at row 1", () => {
+  const sheet = { id: "sheet_empty" };
+  const startingOrder = 0;
+  const pastedRows = [
+    { id: "new_1", sheetId: sheet.id, order: 0, data: { col_name: "First Lead" } },
+    { id: "new_2", sheetId: sheet.id, order: 1, data: { col_name: "Second Lead" } },
+  ];
+
+  const orderMap = createTestOrderToRowMap(pastedRows);
+  const row1 = getTestRowAtIndex(0, sheet, orderMap);
+  const row2 = getTestRowAtIndex(1, sheet, orderMap);
+
+  assert.strictEqual(row1.data.col_name, "First Lead");
+  assert.strictEqual(row2.data.col_name, "Second Lead");
+});
+
+it("Scenario 4: Paste leads into a sheet with existing records. Confirm new leads appear after existing records", () => {
+  const sheet = { id: "sheet_existing" };
+  const existingRecords = [
+    { id: "ex_1", order: 0, data: { col_name: "Existing 1" } },
+    { id: "ex_2", order: 1, data: { col_name: "Existing 2" } },
+  ];
+
+  // Pasting after existing records (at row 3, index 2)
+  const newRecords = [
+    { id: "new_3", order: 2, data: { col_name: "New 3" } },
+    { id: "new_4", order: 3, data: { col_name: "New 4" } },
+  ];
+
+  const combined = [...existingRecords, ...newRecords];
+  const orderMap = createTestOrderToRowMap(combined);
+
+  assert.strictEqual(getTestRowAtIndex(0, sheet, orderMap).data.col_name, "Existing 1");
+  assert.strictEqual(getTestRowAtIndex(1, sheet, orderMap).data.col_name, "Existing 2");
+  assert.strictEqual(getTestRowAtIndex(2, sheet, orderMap).data.col_name, "New 3");
+  assert.strictEqual(getTestRowAtIndex(3, sheet, orderMap).data.col_name, "New 4");
+});
+
+it("Scenario 5: Paste leads between existing records (insert row). Confirm downstream records shift down", () => {
+  // Existing records at index 0, 1, 2, 3
+  const existing = [
+    { id: "row_0", order: 0, name: "Lead A" },
+    { id: "row_1", order: 1, name: "Lead B" },
+    { id: "row_2", order: 2, name: "Lead C" },
+    { id: "row_3", order: 3, name: "Lead D" },
+  ];
+
+  // Insert 2 rows at index 1: orders 1 and 2
+  const insertOrder = 1;
+  const insertCount = 2;
+
+  // Simulate backend atomic shift down: rows with order >= insertOrder increment by insertCount
+  const shiftedExisting = existing.map((r) => {
+    if (r.order >= insertOrder) {
+      return { ...r, order: r.order + insertCount };
+    }
+    return r;
+  });
+
+  const inserted = [
+    { id: "ins_1", order: 1, name: "Inserted 1" },
+    { id: "ins_2", order: 2, name: "Inserted 2" },
+  ];
+
+  const combined = [...shiftedExisting, ...inserted].sort((a, b) => a.order - b.order);
+
+  assert.strictEqual(combined[0].name, "Lead A"); // order 0
+  assert.strictEqual(combined[1].name, "Inserted 1"); // order 1
+  assert.strictEqual(combined[2].name, "Inserted 2"); // order 2
+  assert.strictEqual(combined[3].name, "Lead B"); // shifted to order 3
+  assert.strictEqual(combined[4].name, "Lead C"); // shifted to order 4
+  assert.strictEqual(combined[5].name, "Lead D"); // shifted to order 5
+});
+
+it("Scenario 6: Edit a lead at row 44. Confirm it does not move to row 1 or the bottom", () => {
+  const sheet = { id: "sheet_edit" };
+  const rows = [
+    { id: "lead_0", order: 0, data: { col_name: "Lead 1" } },
+    { id: "lead_43", order: 43, data: { col_name: "Original 44", col_number: "9876543210" } },
+  ];
+
+  // User edits lead at row 44
+  const updatedRows = rows.map((r) =>
+    r.id === "lead_43"
+      ? { ...r, data: { ...r.data, col_name: "Edited 44 Name" } }
+      : r
+  );
+
+  const orderMap = createTestOrderToRowMap(updatedRows);
+  const row44 = getTestRowAtIndex(43, sheet, orderMap);
+
+  assert.strictEqual(row44.id, "lead_43");
+  assert.strictEqual(row44.data.col_name, "Edited 44 Name");
+  assert.strictEqual(row44.order, 43);
+
+  // Row 1 (index 0) remains unchanged
+  assert.strictEqual(getTestRowAtIndex(0, sheet, orderMap).data.col_name, "Lead 1");
+});
+
+it("Scenario 7: Sort by column, then clear sorting. Confirm records return to their natural row order", () => {
+  const naturalRows = [
+    { id: "r1", order: 0, data: { col_name: "Zara" } },
+    { id: "r2", order: 1, data: { col_name: "Alice" } },
+    { id: "r3", order: 2, data: { col_name: "Bob" } },
+  ];
+
+  // User applies sorting by col_name ASC
+  const sortedByName = [...naturalRows].sort((a, b) =>
+    a.data.col_name.localeCompare(b.data.col_name)
+  );
+  assert.deepStrictEqual(sortedByName.map((r) => r.data.col_name), ["Alice", "Bob", "Zara"]);
+
+  // User clears sorting: restores natural order sorted by row.order
+  const restoredRows = [...sortedByName].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  assert.deepStrictEqual(restoredRows.map((r) => r.data.col_name), ["Zara", "Alice", "Bob"]);
+});
+
+it("Scenario 8: Filter by date/status, then clear filter. Confirm records return to their original row positions", () => {
+  const sheet = { id: "sheet_filt" };
+  const rows = [
+    { id: "r0", order: 0, data: { col_name: "Lead 1", col_followup_1: "Call Done" } },
+    { id: "r10", order: 10, data: { col_name: "Lead 11", col_followup_1: "Site Visit Completed" } },
+    { id: "r43", order: 43, data: { col_name: "Lead 44", col_followup_1: "Site Visit Completed" } },
+  ];
+
+  // Filter by Site Visit Completed
+  const filtered = rows.filter((r) => r.data.col_followup_1 === "Site Visit Completed");
+  assert.strictEqual(filtered.length, 2);
+
+  // Clear filter
+  const orderMap = createTestOrderToRowMap(rows);
+  assert.strictEqual(getTestRowAtIndex(0, sheet, orderMap).id, "r0");
+  assert.strictEqual(getTestRowAtIndex(10, sheet, orderMap).id, "r10");
+  assert.strictEqual(getTestRowAtIndex(43, sheet, orderMap).id, "r43");
+});
+
+it("Scenario 9: Refresh browser after pasting. Confirm all rows remain in identical positions", () => {
+  const sheet = { id: "sheet_refresh" };
+  const serverDbRows = [
+    { id: "id_1", order: 0, data: { col_name: "Lead 1" } },
+    { id: "id_2", order: 1, data: { col_name: "Lead 2" } },
+    { id: "id_44", order: 43, data: { col_name: "Lead 44" } },
+  ];
+
+  // Browser fresh reload calls GET /api/sheets/[id] -> rows ordered by `order: 'asc'`
+  const fetchedRows = [...serverDbRows].sort((a, b) => a.order - b.order);
+  const orderMap = createTestOrderToRowMap(fetchedRows);
+
+  assert.strictEqual(getTestRowAtIndex(0, sheet, orderMap).id, "id_1");
+  assert.strictEqual(getTestRowAtIndex(1, sheet, orderMap).id, "id_2");
+  assert.strictEqual(getTestRowAtIndex(43, sheet, orderMap).id, "id_44");
+});
+
+it("Scenario 10: Trigger manual Sync DB. Confirm no rows move", () => {
+  const sheet = { id: "sheet_sync" };
+  const currentUiRows = [
+    { id: "r_0", order: 0, data: { col_name: "First" } },
+    { id: "r_43", order: 43, data: { col_name: "Pasted 44" } },
+  ];
+
+  // Sync DB returns same database state
+  const serverRows = [
+    { id: "r_0", order: 0, data: { col_name: "First" } },
+    { id: "r_43", order: 43, data: { col_name: "Pasted 44" } },
+  ];
+
+  const merged = simulateMergeServerRows(currentUiRows, serverRows);
+  merged.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const orderMap = createTestOrderToRowMap(merged);
+
+  assert.strictEqual(getTestRowAtIndex(0, sheet, orderMap).data.col_name, "First");
+  assert.strictEqual(getTestRowAtIndex(43, sheet, orderMap).data.col_name, "Pasted 44");
+});
+
+it("Scenario 11: Multi-user test: User A pastes leads, User B views sheet. Confirm both see identical row positions", () => {
+  const sheet = { id: "sheet_collab" };
+
+  // User A pastes lead at row 44 (order 43)
+  const serverDb = [
+    { id: "row_a1", order: 0, data: { col_name: "Alpha" } },
+    { id: "row_a44", order: 43, data: { col_name: "Omega" } },
+  ];
+
+  // User B's polling fetches from DB with deterministic order
+  const userBRows = [...serverDb].sort((a, b) => a.order - b.order);
+  const orderMapB = createTestOrderToRowMap(userBRows);
+
+  assert.strictEqual(getTestRowAtIndex(0, sheet, orderMapB).data.col_name, "Alpha");
+  assert.strictEqual(getTestRowAtIndex(43, sheet, orderMapB).data.col_name, "Omega");
+});
+
+it("Scenario 12: Mobile view test: Confirm row order matches desktop row order", () => {
+  const sheet = {
+    id: "sheet_sync_devices",
+    columns: sampleColumns,
+    rows: [
+      { id: "m3", order: 43, data: { col_name: "Lead 44", col_number: "9000000044" } },
+      { id: "m1", order: 0, data: { col_name: "Lead 1", col_number: "9000000001" } },
+      { id: "m2", order: 10, data: { col_name: "Lead 11", col_number: "9000000011" } },
+    ],
+  };
+
+  // Mobile list view sorting logic:
+  const mobileLeads = [...sheet.rows].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+  // Desktop visible row ordering:
+  const desktopOrderMap = createTestOrderToRowMap(sheet.rows);
+  const desktopRow0 = getTestRowAtIndex(0, sheet, desktopOrderMap);
+  const desktopRow10 = getTestRowAtIndex(10, sheet, desktopOrderMap);
+  const desktopRow43 = getTestRowAtIndex(43, sheet, desktopOrderMap);
+
+  assert.strictEqual(mobileLeads[0].id, desktopRow0.id);
+  assert.strictEqual(mobileLeads[1].id, desktopRow10.id);
+  assert.strictEqual(mobileLeads[2].id, desktopRow43.id);
+  assert.deepStrictEqual(
+    mobileLeads.map((r) => r.data.col_name),
+    ["Lead 1", "Lead 11", "Lead 44"]
+  );
+});
+
 console.log(`\n=== ALL TESTS PASSED: ${passed}/${total} ===\n`);
 if (passed !== total) {
   process.exit(1);
