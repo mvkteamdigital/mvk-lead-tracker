@@ -81,9 +81,11 @@ export function SpreadsheetApp() {
   const [totalSavedInBatch, setTotalSavedInBatch] = useState(0);
 
   // Robust Save & Refresh Mutex Refs (Guarantees background pollers NEVER overwrite in-flight or pending saves)
+  const activeSavesCountRef = useRef(0);
   const isSavingRef = useRef(false);
   const lastSaveTimestampRef = useRef(0);
   const refreshRequestIdRef = useRef(0);
+  const pendingCellEditsRef = useRef<Map<string, { columnId: string; value: any; timestamp: number }>>(new Map());
 
   // Lightweight Toast Notification system (eliminates native alerts and page reloads)
   const [toast, setToast] = useState<{ id: number; message: string; type: "success" | "error" | "info" } | null>(null);
@@ -529,7 +531,7 @@ export function SpreadsheetApp() {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const handleRefreshFromDB = useCallback(async () => {
-    if (!activeSheetId || isRefreshing || isSavingRef.current) return;
+    if (!activeSheetId || isRefreshing || activeSavesCountRef.current > 0 || isSavingRef.current) return;
 
     // Do not run background refresh if a save was completed very recently (within 8 seconds cooldown)
     const timeSinceLastSave = Date.now() - lastSaveTimestampRef.current;
@@ -545,7 +547,7 @@ export function SpreadsheetApp() {
       ]);
 
       // If another save or refresh was started in the meantime, discard this response
-      if (thisRequestId !== refreshRequestIdRef.current || isSavingRef.current) {
+      if (thisRequestId !== refreshRequestIdRef.current || activeSavesCountRef.current > 0 || isSavingRef.current) {
         return;
       }
 
@@ -560,7 +562,18 @@ export function SpreadsheetApp() {
             (r) => r.id && r.id.startsWith("temp_") && !serverRowIds.has(r.id)
           );
 
-          const allRows = pendingTempRows.length > 0 ? [...data.sheet.rows, ...pendingTempRows] : [...data.sheet.rows];
+          // Merge safety net: If there are in-flight cell edits, ensure server rows don't overwrite them
+          const mergedServerRows = data.sheet.rows.map((r: RowData) => {
+            let rowData = { ...r.data };
+            pendingCellEditsRef.current.forEach((edit, key) => {
+              if (key.startsWith(`${r.id}:`) || (r.order !== undefined && key.startsWith(`order_${r.order}:`))) {
+                rowData[edit.columnId] = edit.value;
+              }
+            });
+            return { ...r, data: rowData };
+          });
+
+          const allRows = pendingTempRows.length > 0 ? [...mergedServerRows, ...pendingTempRows] : [...mergedServerRows];
           allRows.sort((a: RowData, b: RowData) => (a.order ?? 0) - (b.order ?? 0));
 
           return {
@@ -583,10 +596,11 @@ export function SpreadsheetApp() {
 
   // Silent background refresh for seamless error recovery without unmounting or setting loading spinner
   const silentRefreshActiveSheet = useCallback(async (sheetId: string) => {
-    if (isSavingRef.current) return;
+    if (activeSavesCountRef.current > 0 || isSavingRef.current) return;
     try {
       const res = await fetch(`/api/sheets/${sheetId}`);
       if (!res.ok) return;
+      if (activeSavesCountRef.current > 0 || isSavingRef.current) return;
       const data = await res.json();
       if (data.sheet) {
         setActiveSheet((prev) => {
@@ -598,7 +612,18 @@ export function SpreadsheetApp() {
             (r) => r.id && r.id.startsWith("temp_") && !serverRowIds.has(r.id)
           );
 
-          const allRows = pendingTempRows.length > 0 ? [...data.sheet.rows, ...pendingTempRows] : [...data.sheet.rows];
+          // Merge safety net: Apply any pending in-flight edits
+          const mergedServerRows = data.sheet.rows.map((r: RowData) => {
+            let rowData = { ...r.data };
+            pendingCellEditsRef.current.forEach((edit, key) => {
+              if (key.startsWith(`${r.id}:`) || (r.order !== undefined && key.startsWith(`order_${r.order}:`))) {
+                rowData[edit.columnId] = edit.value;
+              }
+            });
+            return { ...r, data: rowData };
+          });
+
+          const allRows = pendingTempRows.length > 0 ? [...mergedServerRows, ...pendingTempRows] : [...mergedServerRows];
           allRows.sort((a: RowData, b: RowData) => (a.order ?? 0) - (b.order ?? 0));
 
           return {
@@ -619,7 +644,7 @@ export function SpreadsheetApp() {
     if (!activeSheetId || isDropdownModalOpen) return;
 
     const interval = setInterval(() => {
-      if (savingStatus !== "saving" && !isSavingRef.current) {
+      if (savingStatus !== "saving" && !isSavingRef.current && activeSavesCountRef.current === 0) {
         handleRefreshFromDB();
       }
     }, 15000);
@@ -702,6 +727,12 @@ export function SpreadsheetApp() {
     const sanitizedValue = sanitizeCellValue(value, colDef);
     const rowOrder = order !== undefined ? order : activeCellRef.current?.rowIdx ?? 0;
 
+    // Track pending in-flight edit
+    const pendingKey = `${rowId || `order_${rowOrder}`}:${columnId}`;
+    pendingCellEditsRef.current.set(pendingKey, { columnId, value: sanitizedValue, timestamp: Date.now() });
+    activeSavesCountRef.current++;
+    isSavingRef.current = true;
+
     // Optimistically update local state immediately for zero-lag UI
     setActiveSheet((prev) => {
       if (!prev) return prev;
@@ -751,7 +782,6 @@ export function SpreadsheetApp() {
     });
 
     setSavingStatus("saving");
-    isSavingRef.current = true;
     const thisCellRequestId = ++refreshRequestIdRef.current;
 
     try {
@@ -780,17 +810,43 @@ export function SpreadsheetApp() {
       }
       const data = await res.json();
       if (data.row) {
+        // If activeCell is currently pointing to this row, ensure its rowId is upgraded to the real DB id
+        setActiveCell((prev) => {
+          if (!prev) return prev;
+          if (prev.rowId === rowId || (prev.rowIdx === rowOrder && (!prev.rowId || prev.rowId.startsWith("temp_")))) {
+            return {
+              ...prev,
+              rowId: data.row.id,
+            };
+          }
+          return prev;
+        });
+
         setActiveSheet((prev) => {
           if (!prev || prev.id !== currentSheet.id) return prev;
           const targetRowId = data.row.id;
           return {
             ...prev,
             rows: prev.rows.map((r) => {
-              if (r.id === rowId || r.id === targetRowId) {
+              if (r.id === rowId || r.id === targetRowId || (rowOrder !== undefined && r.order === rowOrder)) {
+                // Collect any pending edits for this row
+                const pendingEditsOnThisRow: Record<string, any> = {};
+                pendingCellEditsRef.current.forEach((edit, key) => {
+                  if (key.startsWith(`${r.id}:`) || (rowOrder !== undefined && key.startsWith(`order_${rowOrder}:`))) {
+                    pendingEditsOnThisRow[edit.columnId] = edit.value;
+                  }
+                });
+
                 return {
                   ...r,
                   ...data.row,
-                  data: { ...r.data, ...data.row.data },
+                  id: data.row.id,
+                  data: {
+                    ...data.row.data,
+                    ...r.data,
+                    [columnId]: sanitizedValue,
+                    ...pendingEditsOnThisRow,
+                  },
                 };
               }
               return r;
@@ -805,7 +861,9 @@ export function SpreadsheetApp() {
       silentRefreshActiveSheet(currentSheet.id);
       setSavingStatus("error");
     } finally {
-      isSavingRef.current = false;
+      activeSavesCountRef.current = Math.max(0, activeSavesCountRef.current - 1);
+      isSavingRef.current = activeSavesCountRef.current > 0;
+      pendingCellEditsRef.current.delete(pendingKey);
       lastSaveTimestampRef.current = Date.now();
     }
   };
@@ -816,6 +874,7 @@ export function SpreadsheetApp() {
     if (!currentSheet) return;
 
     // Mutex lock to stop background sync overwrites
+    activeSavesCountRef.current++;
     isSavingRef.current = true;
     const currentBatchRequestId = ++refreshRequestIdRef.current;
 
@@ -1038,7 +1097,8 @@ export function SpreadsheetApp() {
       // Keep optimistic rows in state so user data is never lost.
       setSavingStatus("error");
     } finally {
-      isSavingRef.current = false;
+      activeSavesCountRef.current = Math.max(0, activeSavesCountRef.current - 1);
+      isSavingRef.current = activeSavesCountRef.current > 0;
       lastSaveTimestampRef.current = Date.now();
     }
   };

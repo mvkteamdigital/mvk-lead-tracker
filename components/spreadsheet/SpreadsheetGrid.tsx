@@ -73,6 +73,8 @@ interface GridCellProps {
   editValue?: string;
   onEditValueChange?: (val: string) => void;
   onCommitEdit?: () => void;
+  onCommitEditWithDirection?: (dir?: "down" | "up" | "right" | "left") => void;
+  onCancelEdit?: () => void;
   onPaste?: (e: React.ClipboardEvent) => void;
   editInputRef?: React.RefObject<HTMLInputElement>;
   onCellMouseDown: (e: React.MouseEvent, rowIdx: number, colIdx: number, col: ColumnDef) => void;
@@ -102,6 +104,8 @@ const GridCell = ({
   editValue = "",
   onEditValueChange,
   onCommitEdit,
+  onCommitEditWithDirection,
+  onCancelEdit,
   onPaste,
   editInputRef,
   onCellMouseDown,
@@ -172,12 +176,22 @@ const GridCell = ({
           type={col.type === "date" ? "date" : "text"}
           value={editValue}
           onChange={(e) => onEditValueChange?.(e.target.value)}
-          onBlur={onCommitEdit}
+          onBlur={() => onCommitEdit?.()}
           onPaste={onPaste}
+          autoFocus
           onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === "Escape") {
+            if (e.key === "Enter") {
               e.preventDefault();
-              onCommitEdit?.();
+              e.stopPropagation();
+              onCommitEditWithDirection?.(e.shiftKey ? "up" : "down");
+            } else if (e.key === "Tab") {
+              e.preventDefault();
+              e.stopPropagation();
+              onCommitEditWithDirection?.(e.shiftKey ? "left" : "right");
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              e.stopPropagation();
+              onCancelEdit?.();
             }
           }}
           className="absolute inset-0 w-full h-full px-2 text-xs bg-white text-gray-900 font-medium border-2 border-blue-600 outline-none z-20 select-text"
@@ -270,6 +284,8 @@ interface GridRowProps {
   editValue: string;
   onEditValueChange: (val: string) => void;
   onCommitEdit: () => void;
+  onCommitEditWithDirection?: (dir?: "down" | "up" | "right" | "left") => void;
+  onCancelEdit?: () => void;
   onPaste?: (e: React.ClipboardEvent) => void;
   editInputRef: React.RefObject<HTMLInputElement>;
   onRowHeaderClick: (e: React.MouseEvent, row: RowData, rowIdx: number) => void;
@@ -295,6 +311,8 @@ const GridRow = ({
   editValue,
   onEditValueChange,
   onCommitEdit,
+  onCommitEditWithDirection,
+  onCancelEdit,
   onPaste,
   editInputRef,
   onRowHeaderClick,
@@ -375,6 +393,8 @@ const GridRow = ({
             editValue={isEditing ? editValue : undefined}
             onEditValueChange={isEditing ? onEditValueChange : undefined}
             onCommitEdit={isEditing ? onCommitEdit : undefined}
+            onCommitEditWithDirection={isEditing ? onCommitEditWithDirection : undefined}
+            onCancelEdit={isEditing ? onCancelEdit : undefined}
             onPaste={onPaste}
             editInputRef={isEditing ? editInputRef : undefined}
             onCellMouseDown={(e, rIdx, cIdx, c) => onCellMouseDown(e, row, rIdx, cIdx, c)}
@@ -491,10 +511,23 @@ export function SpreadsheetGrid({
   });
   const gridContainerRef = useRef<HTMLDivElement>(null);
 
-  // Editing state
-  const [editingCell, setEditingCell] = useState<{ rowId: string; colId: string; rowIdx: number } | null>(null);
-  const [editValue, setEditValue] = useState("");
+  // Editing state with synchronous ref mirrors to prevent stale closures and race conditions
+  const [editingCell, _setEditingCell] = useState<{ rowId: string; colId: string; rowIdx: number } | null>(null);
+  const editingCellRef = useRef<{ rowId: string; colId: string; rowIdx: number } | null>(null);
+  const setEditingCell = useCallback((cell: { rowId: string; colId: string; rowIdx: number } | null) => {
+    editingCellRef.current = cell;
+    _setEditingCell(cell);
+  }, []);
+
+  const [editValue, _setEditValue] = useState("");
+  const editValueRef = useRef("");
+  const setEditValue = useCallback((val: string) => {
+    editValueRef.current = val;
+    _setEditValue(val);
+  }, []);
+
   const editInputRef = useRef<HTMLInputElement>(null);
+  const isCommittingRef = useRef(false);
 
   // Google Sheets Selection state manager
   const [selectionAnchor, setSelectionAnchor] = useState<{ rowIdx: number; colIdx: number } | null>(null);
@@ -522,11 +555,6 @@ export function SpreadsheetGrid({
   useEffect(() => {
     selectionAnchorRef.current = selectionAnchor;
   }, [selectionAnchor]);
-
-  const editingCellRef = useRef(editingCell);
-  useEffect(() => {
-    editingCellRef.current = editingCell;
-  }, [editingCell]);
 
   // Dropdown popover state
   const [openDropdown, setOpenDropdown] = useState<{
@@ -778,49 +806,78 @@ export function SpreadsheetGrid({
 
   // Commit in-cell edit with optional directional movement
   const commitEdit = useCallback(async (moveDirection?: "down" | "up" | "right" | "left") => {
-    if (!editingCellRef.current) return;
-    const { rowId, colId, rowIdx } = editingCellRef.current;
-    const valueToSave = editValue;
-    setEditingCell(null);
-    await onUpdateCell(rowId, colId, valueToSave, rowIdx);
+    const currentEdit = editingCellRef.current;
+    if (!currentEdit) return;
 
-    if (moveDirection && activeCell) {
-      const currentColIdx = sheet.columns.findIndex((c) => c.id === activeCell.colId);
-      const maxRowIdx = totalRowCount - 1;
-      const maxColIdx = sheet.columns.length - 1;
+    if (isCommittingRef.current) return;
+    isCommittingRef.current = true;
 
-      if (moveDirection === "down" && activeCell.rowIdx < maxRowIdx) {
-        const nextRowIdx = activeCell.rowIdx + 1;
-        const targetRow = getRowAtIndex(nextRowIdx);
-        setActiveCell({ rowId: targetRow?.id, rowIdx: nextRowIdx, colId: activeCell.colId, colName: activeCell.colName });
-        setSelectionAnchor({ rowIdx: nextRowIdx, colIdx: currentColIdx });
-        setSelectionFocus({ rowIdx: nextRowIdx, colIdx: currentColIdx });
-      } else if (moveDirection === "up" && activeCell.rowIdx > 0) {
-        const nextRowIdx = activeCell.rowIdx - 1;
-        const targetRow = getRowAtIndex(nextRowIdx);
-        setActiveCell({ rowId: targetRow?.id, rowIdx: nextRowIdx, colId: activeCell.colId, colName: activeCell.colName });
-        setSelectionAnchor({ rowIdx: nextRowIdx, colIdx: currentColIdx });
-        setSelectionFocus({ rowIdx: nextRowIdx, colIdx: currentColIdx });
-      } else if (moveDirection === "right" && currentColIdx < maxColIdx) {
-        const nextCol = sheet.columns[currentColIdx + 1];
-        setActiveCell({ rowId: activeCell.rowId, rowIdx: activeCell.rowIdx, colId: nextCol.id, colName: nextCol.name });
-        setSelectionAnchor({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx + 1 });
-        setSelectionFocus({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx + 1 });
-      } else if (moveDirection === "left" && currentColIdx > 0) {
-        const prevCol = sheet.columns[currentColIdx - 1];
-        setActiveCell({ rowId: activeCell.rowId, rowIdx: activeCell.rowIdx, colId: prevCol.id, colName: prevCol.name });
-        setSelectionAnchor({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx - 1 });
-        setSelectionFocus({ rowIdx: activeCell.rowIdx, colIdx: currentColIdx - 1 });
+    // Authoritative value: inspect DOM input element directly if available, fallback to editValueRef
+    const valueToSave = editInputRef.current ? editInputRef.current.value : editValueRef.current;
+    const { rowId, colId, rowIdx } = currentEdit;
+
+    // Immediately clear editing state synchronously
+    editingCellRef.current = null;
+    _setEditingCell(null);
+    isCommittingRef.current = false;
+
+    try {
+      await onUpdateCell(rowId, colId, valueToSave, rowIdx);
+    } catch (err) {
+      console.error("Error committing cell edit:", err);
+    }
+
+    if (moveDirection) {
+      const currentActive = activeCellRef.current;
+      if (currentActive) {
+        const currentColIdx = sheetRef.current.columns.findIndex((c) => c.id === currentActive.colId);
+        const maxRowIdx = totalRowCount - 1;
+        const maxColIdx = sheetRef.current.columns.length - 1;
+
+        if (moveDirection === "down" && currentActive.rowIdx < maxRowIdx) {
+          const nextRowIdx = currentActive.rowIdx + 1;
+          const targetRow = getRowAtIndex(nextRowIdx);
+          setActiveCell({ rowId: targetRow?.id, rowIdx: nextRowIdx, colId: currentActive.colId, colName: currentActive.colName });
+          setSelectionAnchor({ rowIdx: nextRowIdx, colIdx: currentColIdx });
+          setSelectionFocus({ rowIdx: nextRowIdx, colIdx: currentColIdx });
+        } else if (moveDirection === "up" && currentActive.rowIdx > 0) {
+          const nextRowIdx = currentActive.rowIdx - 1;
+          const targetRow = getRowAtIndex(nextRowIdx);
+          setActiveCell({ rowId: targetRow?.id, rowIdx: nextRowIdx, colId: currentActive.colId, colName: currentActive.colName });
+          setSelectionAnchor({ rowIdx: nextRowIdx, colIdx: currentColIdx });
+          setSelectionFocus({ rowIdx: nextRowIdx, colIdx: currentColIdx });
+        } else if (moveDirection === "right" && currentColIdx < maxColIdx) {
+          const nextCol = sheetRef.current.columns[currentColIdx + 1];
+          setActiveCell({ rowId: currentActive.rowId, rowIdx: currentActive.rowIdx, colId: nextCol.id, colName: nextCol.name });
+          setSelectionAnchor({ rowIdx: currentActive.rowIdx, colIdx: currentColIdx + 1 });
+          setSelectionFocus({ rowIdx: currentActive.rowIdx, colIdx: currentColIdx + 1 });
+        } else if (moveDirection === "left" && currentColIdx > 0) {
+          const prevCol = sheetRef.current.columns[currentColIdx - 1];
+          setActiveCell({ rowId: currentActive.rowId, rowIdx: currentActive.rowIdx, colId: prevCol.id, colName: prevCol.name });
+          setSelectionAnchor({ rowIdx: currentActive.rowIdx, colIdx: currentColIdx - 1 });
+          setSelectionFocus({ rowIdx: currentActive.rowIdx, colIdx: currentColIdx - 1 });
+        }
       }
     }
-  }, [editValue, onUpdateCell, activeCell, sheet.columns, totalRowCount, getRowAtIndex, setActiveCell]);
+  }, [onUpdateCell, totalRowCount, getRowAtIndex, setActiveCell]);
+
+  const commitEditRef = useRef(commitEdit);
+  useEffect(() => {
+    commitEditRef.current = commitEdit;
+  }, [commitEdit]);
+
+  const cancelEdit = useCallback(() => {
+    editingCellRef.current = null;
+    _setEditingCell(null);
+  }, []);
 
   // Start in-cell edit
   const startEditing = useCallback((row: RowData, rowIdx: number, col: ColumnDef) => {
     if (col.type === "dropdown") return;
+    const initialVal = row.data[col.id] || "";
+    setEditValue(initialVal);
     setEditingCell({ rowId: row.id, colId: col.id, rowIdx });
-    setEditValue(row.data[col.id] || "");
-  }, []);
+  }, [setEditValue, setEditingCell]);
 
   // Handle cell double click
   const handleCellDoubleClick = useCallback((row: RowData, rowIdx: number, col: ColumnDef) => {
@@ -838,7 +895,7 @@ export function SpreadsheetGrid({
     if (e.button !== 0) return; // Only primary left-click
 
     if (editingCellRef.current && (editingCellRef.current.rowIdx !== rowIdx || editingCellRef.current.colId !== col.id)) {
-      commitEdit();
+      commitEditRef.current();
     }
 
     if (!editingCellRef.current || editingCellRef.current.rowIdx !== rowIdx || editingCellRef.current.colId !== col.id) {
@@ -858,7 +915,7 @@ export function SpreadsheetGrid({
       setIsMouseDown(true);
     }
     setOpenDropdown(null);
-  }, [commitEdit, setActiveCell]);
+  }, [setActiveCell]);
 
   // Handle cell mouse enter during drag
   const handleCellMouseEnter = useCallback((rowIdx: number, colIdx: number) => {
@@ -871,7 +928,7 @@ export function SpreadsheetGrid({
   const handleRowHeaderClick = useCallback((e: React.MouseEvent, row: RowData, rowIdx: number) => {
     e.preventDefault();
     if (editingCellRef.current) {
-      commitEdit();
+      commitEditRef.current();
     }
     if (gridContainerRef.current) {
       gridContainerRef.current.focus();
@@ -891,7 +948,7 @@ export function SpreadsheetGrid({
       setSelectionAnchor({ rowIdx, colIdx: 0 });
       setSelectionFocus({ rowIdx, colIdx: sheet.columns.length - 1 });
     }
-  }, [commitEdit, sheet.columns, setActiveCell]);
+  }, [sheet.columns, setActiveCell]);
 
   // Column header click (selects the entire column across all rows, like Google Sheets)
   const handleColumnHeaderClick = useCallback(
@@ -899,7 +956,7 @@ export function SpreadsheetGrid({
       if (resizingCol || renamingColId !== null || isDraggingCol) return;
 
       if (editingCellRef.current) {
-        commitEdit();
+        commitEditRef.current();
       }
       if (gridContainerRef.current) {
         gridContainerRef.current.focus();
@@ -924,12 +981,15 @@ export function SpreadsheetGrid({
         setSelectionFocus({ rowIdx: lastRowIdx, colIdx });
       }
     },
-    [resizingCol, renamingColId, isDraggingCol, commitEdit, totalRowCount, getRowAtIndex, setActiveCell]
+    [resizingCol, renamingColId, isDraggingCol, totalRowCount, getRowAtIndex, setActiveCell]
   );
 
   // Select all cells in sheet when top-left # corner is clicked
   const handleSelectAllSheet = useCallback(() => {
     if (sheet.columns.length === 0) return;
+    if (editingCellRef.current) {
+      commitEditRef.current();
+    }
     const firstCol = sheet.columns[0];
     const lastRowIdx = totalRowCount - 1;
     const firstRow = getRowAtIndex(0);
@@ -954,6 +1014,9 @@ export function SpreadsheetGrid({
     col: ColumnDef
   ) => {
     e.stopPropagation();
+    if (editingCellRef.current) {
+      commitEditRef.current();
+    }
     setActiveCell({ rowId: row.id, rowIdx, colId: col.id, colName: col.name });
     setSelectionAnchor({ rowIdx, colIdx });
     setSelectionFocus({ rowIdx, colIdx });
@@ -974,6 +1037,9 @@ export function SpreadsheetGrid({
   const handleRowContextMenu = useCallback(
     (e: React.MouseEvent, rowId: string, rowIdx: number) => {
       e.preventDefault();
+      if (editingCellRef.current) {
+        commitEditRef.current();
+      }
       setContextMenu({
         x: e.clientX,
         y: e.clientY,
@@ -984,6 +1050,22 @@ export function SpreadsheetGrid({
     },
     [sheet.columns]
   );
+
+  // Global click outside grid to commit active in-cell editing
+  useEffect(() => {
+    const handleGlobalMouseDown = (e: MouseEvent) => {
+      if (editingCellRef.current && gridContainerRef.current) {
+        const target = e.target as Node;
+        const isInsideGrid = gridContainerRef.current.contains(target);
+        const isInsidePopover = (target as HTMLElement)?.closest?.(".fixed.z-50");
+        if (!isInsideGrid && !isInsidePopover) {
+          commitEditRef.current();
+        }
+      }
+    };
+    window.addEventListener("mousedown", handleGlobalMouseDown, true);
+    return () => window.removeEventListener("mousedown", handleGlobalMouseDown, true);
+  }, []);
 
   // Select dropdown option
   const handleSelectDropdownOption = async (option: string) => {
@@ -1585,6 +1667,9 @@ export function SpreadsheetGrid({
     col: ColumnDef
   ) => {
     e.preventDefault();
+    if (editingCellRef.current) {
+      commitEditRef.current();
+    }
     const inSel =
       selectionRange !== null &&
       rowIdx >= selectionRange.startRow &&
@@ -1866,6 +1951,8 @@ export function SpreadsheetGrid({
                       editValue={editValue}
                       onEditValueChange={setEditValue}
                       onCommitEdit={commitEdit}
+                      onCommitEditWithDirection={commitEdit}
+                      onCancelEdit={cancelEdit}
                       onPaste={handlePaste}
                       editInputRef={editInputRef}
                       onRowHeaderClick={handleRowHeaderClick}
@@ -1905,6 +1992,8 @@ export function SpreadsheetGrid({
                       editValue={editValue}
                       onEditValueChange={setEditValue}
                       onCommitEdit={commitEdit}
+                      onCommitEditWithDirection={commitEdit}
+                      onCancelEdit={cancelEdit}
                       onPaste={handlePaste}
                       editInputRef={editInputRef}
                       onRowHeaderClick={handleRowHeaderClick}

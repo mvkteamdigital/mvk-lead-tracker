@@ -280,42 +280,49 @@ export async function PUT(req: Request, { params }: Params) {
         }
       }
 
-      let existing = null;
-      if (body.rowId && !body.rowId.startsWith("temp_")) {
-        existing = await prisma.row.findUnique({
-          where: { id: body.rowId },
-        });
-      }
+      // Execute in atomic transaction to prevent read-modify-write race conditions
+      const resultRow = await prisma.$transaction(async (tx) => {
+        let existing = null;
+        if (body.rowId && !body.rowId.startsWith("temp_")) {
+          existing = await tx.row.findUnique({
+            where: { id: body.rowId },
+          });
+        }
 
-      if (existing && existing.sheetId === sheetId) {
-        const currentData = JSON.parse(existing.data || "{}");
-        const wasEmptyPlaceholder = !isValidLead(currentData);
-        const oldName = getLeadName(currentData);
-        currentData[body.columnId] = body.value;
-        const newName = getLeadName(currentData);
-        const isNameChanged = isNameFieldKey(body.columnId) && oldName !== newName;
-        const isNowValidLead = isValidLead(currentData);
-        const isFirstTimeLeadCreation = wasEmptyPlaceholder && isNowValidLead;
+        // If not found by rowId, check if a row already exists at this order position in the sheet!
+        if (!existing && body.order !== undefined && typeof body.order === "number") {
+          existing = await tx.row.findFirst({
+            where: { sheetId, order: body.order },
+          });
+        }
 
-        const phone = getRowPhoneNumber(currentData);
-        const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
+        if (existing && existing.sheetId === sheetId) {
+          const currentData = JSON.parse(existing.data || "{}");
+          const wasEmptyPlaceholder = !isValidLead(currentData);
+          const oldName = getLeadName(currentData);
+          currentData[body.columnId] = body.value;
+          const newName = getLeadName(currentData);
+          const isNameChanged = isNameFieldKey(body.columnId) && oldName !== newName;
+          const isNowValidLead = isValidLead(currentData);
+          const isFirstTimeLeadCreation = wasEmptyPlaceholder && isNowValidLead;
 
-        const now = new Date();
-        const updated = await prisma.row.update({
-          where: { id: existing.id },
-          data: {
-            data: JSON.stringify(currentData),
-            phoneNumber: phoneExact || null,
-            phoneDigits: phoneDigits || null,
-            ...(isFirstTimeLeadCreation ? { createdAt: now } : {}),
-            ...(isNameChanged || isFirstTimeLeadCreation ? { nameModifiedAt: now } : {}),
-            ...extractFollowupDates(currentData),
-          },
-        });
+          const phone = getRowPhoneNumber(currentData);
+          const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
 
-        return NextResponse.json({
-          success: true,
-          row: {
+          const now = new Date();
+          const updated = await tx.row.update({
+            where: { id: existing.id },
+            data: {
+              data: JSON.stringify(currentData),
+              phoneNumber: phoneExact || null,
+              phoneDigits: phoneDigits || null,
+              ...(isFirstTimeLeadCreation ? { createdAt: now } : {}),
+              ...(isNameChanged || isFirstTimeLeadCreation ? { nameModifiedAt: now } : {}),
+              ...extractFollowupDates(currentData),
+            },
+          });
+
+          return {
             id: updated.id,
             sheetId: updated.sheetId,
             order: updated.order,
@@ -324,55 +331,41 @@ export async function PUT(req: Request, { params }: Params) {
             nameModifiedAt: (updated.nameModifiedAt || updated.createdAt).toISOString(),
             createdAt: updated.createdAt.toISOString(),
             updatedAt: updated.updatedAt.toISOString(),
+          };
+        }
+
+        // If row does not exist in DB yet (editing one of the blank rows)
+        const lastRow = await tx.row.findFirst({
+          where: { sheetId },
+          orderBy: { order: "desc" },
+          select: { order: true },
+        });
+        const nextOrder = (lastRow?.order ?? -1) + 1;
+        const orderVal =
+          body.order !== undefined && body.order !== null && typeof body.order === "number"
+            ? body.order
+            : nextOrder;
+
+        const initialData = { [body.columnId]: body.value };
+        const phone = getRowPhoneNumber(initialData);
+        const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
+        const now = new Date();
+
+        const newRow = await tx.row.create({
+          data: {
+            sheetId,
+            order: orderVal,
+            phoneNumber: phoneExact || null,
+            phoneDigits: phoneDigits || null,
+            data: JSON.stringify(initialData),
+            styles: JSON.stringify({}),
+            nameModifiedAt: now,
+            createdAt: now,
+            ...extractFollowupDates(initialData),
           },
         });
-      }
 
-      // If row does not exist in DB yet (editing one of the blank rows)
-      const lastRow = await prisma.row.findFirst({
-        where: { sheetId },
-        orderBy: { order: "desc" },
-        select: { order: true },
-      });
-      const nextOrder = (lastRow?.order ?? -1) + 1;
-      const orderVal =
-        body.order !== undefined && body.order !== null && typeof body.order === "number"
-          ? body.order
-          : nextOrder;
-
-      // If inserting at an order that already exists, shift colliding rows down
-      const colliding = await prisma.row.count({
-        where: { sheetId, order: orderVal },
-      });
-      if (colliding > 0) {
-        await prisma.row.updateMany({
-          where: { sheetId, order: { gte: orderVal } },
-          data: { order: { increment: 1 } },
-        });
-      }
-
-      const initialData = { [body.columnId]: body.value };
-      const phone = getRowPhoneNumber(initialData);
-      const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
-      const now = new Date();
-
-      const newRow = await prisma.row.create({
-        data: {
-          sheetId,
-          order: orderVal,
-          phoneNumber: phoneExact || null,
-          phoneDigits: phoneDigits || null,
-          data: JSON.stringify(initialData),
-          styles: JSON.stringify({}),
-          nameModifiedAt: now,
-          createdAt: now,
-          ...extractFollowupDates(initialData),
-        },
-      });
-
-      return NextResponse.json({
-        success: true,
-        row: {
+        return {
           id: newRow.id,
           sheetId: newRow.sheetId,
           order: newRow.order,
@@ -381,7 +374,12 @@ export async function PUT(req: Request, { params }: Params) {
           nameModifiedAt: (newRow.nameModifiedAt || newRow.createdAt).toISOString(),
           createdAt: newRow.createdAt.toISOString(),
           updatedAt: newRow.updatedAt.toISOString(),
-        },
+        };
+      });
+
+      return NextResponse.json({
+        success: true,
+        row: resultRow,
       });
     }
 

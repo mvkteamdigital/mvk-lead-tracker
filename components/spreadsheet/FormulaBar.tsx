@@ -1,13 +1,13 @@
 "use client";
 
-import React from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { ActiveCell } from "@/lib/types";
 
 interface FormulaBarProps {
   activeCell: ActiveCell | null;
   cellValue: string;
   onCellValueChange: (val: string) => void;
-  onCommit: () => void;
+  onCommit?: () => void;
 }
 
 export function FormulaBar({
@@ -16,6 +16,26 @@ export function FormulaBar({
   onCellValueChange,
   onCommit,
 }: FormulaBarProps) {
+  const [localValue, setLocalValue] = useState(cellValue);
+  const [isFocused, setIsFocused] = useState(false);
+  const lastCommittedValueRef = useRef(cellValue);
+
+  // Sync external cellValue changes when not focused
+  useEffect(() => {
+    if (!isFocused) {
+      setLocalValue(cellValue);
+      lastCommittedValueRef.current = cellValue;
+    }
+  }, [cellValue, isFocused, activeCell]);
+
+  const commitValue = () => {
+    if (localValue !== lastCommittedValueRef.current) {
+      lastCommittedValueRef.current = localValue;
+      onCellValueChange(localValue);
+    }
+    if (onCommit) onCommit();
+  };
+
   // Convert col index to letter (A, B, C...) or use activeCell info
   const cellCoordinate = activeCell
     ? `${activeCell.colName} (Row ${activeCell.rowIdx + 1})`
@@ -37,11 +57,25 @@ export function FormulaBar({
       <input
         type="text"
         disabled={!activeCell}
-        value={cellValue}
-        onChange={(e) => onCellValueChange(e.target.value)}
+        value={isFocused ? localValue : cellValue}
+        onFocus={() => {
+          setIsFocused(true);
+          setLocalValue(cellValue);
+          lastCommittedValueRef.current = cellValue;
+        }}
+        onChange={(e) => setLocalValue(e.target.value)}
+        onBlur={() => {
+          setIsFocused(false);
+          commitValue();
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
-            onCommit();
+            commitValue();
+            e.currentTarget.blur();
+          } else if (e.key === "Escape") {
+            setLocalValue(cellValue);
+            setIsFocused(false);
+            e.currentTarget.blur();
           }
         }}
         onPaste={(e) => {
@@ -53,7 +87,7 @@ export function FormulaBar({
             .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, "")
             .replace(/[\r\n\t]+/g, " ")
             .trim();
-          onCellValueChange(cleanVal);
+          setLocalValue(cleanVal);
         }}
         placeholder={activeCell ? "Enter value or lead data..." : "Select cell to edit"}
         className="flex-1 px-2 py-0.5 bg-transparent border-0 outline-none text-slate-800 focus:bg-slate-50 rounded text-xs"

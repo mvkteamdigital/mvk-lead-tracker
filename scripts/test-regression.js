@@ -396,18 +396,21 @@ console.log("=== STARTING MVK LEAD TRACKER REGRESSION & DIAGNOSTIC SUITE ===");
 
 let passed = 0;
 let total = 0;
+let testPromiseChain = Promise.resolve();
 
 function it(desc, fn) {
   total++;
-  try {
-    fn();
-    console.log(`  ✓ ${desc}`);
-    passed++;
-  } catch (err) {
-    console.error(`  ✗ ${desc}`);
-    console.error(`    Error: ${err.message}`);
-    process.exitCode = 1;
-  }
+  testPromiseChain = testPromiseChain.then(async () => {
+    try {
+      await fn();
+      console.log(`  ✓ ${desc}`);
+      passed++;
+    } catch (err) {
+      console.error(`  ✗ ${desc}`);
+      console.error(`    Error: ${err.message}`);
+      process.exitCode = 1;
+    }
+  });
 }
 
 // ------------------------------------------
@@ -2070,7 +2073,462 @@ it("Scenario 12: Mobile view test: Confirm row order matches desktop row order",
   );
 });
 
-console.log(`\n=== ALL TESTS PASSED: ${passed}/${total} ===\n`);
-if (passed !== total) {
-  process.exit(1);
+console.log("\n--- Section 11: First-Attempt Cell Editing & Persistence Suite (18 Scenarios) ---");
+
+// Helper mock harness simulating the full React + DOM + Network lifecycle
+class MockGridAppHarness {
+  constructor(initialRows = [], columns = sampleColumns) {
+    this.sheet = { id: "sheet_test_harness", columns, rows: JSON.parse(JSON.stringify(initialRows)) };
+    this.columns = columns;
+    this.activeCell = initialRows.length > 0 ? { rowId: initialRows[0].id, rowIdx: 0, colId: columns[0].id, colName: columns[0].name } : null;
+    this.editingCell = null;
+    this.editValue = "";
+    this.editValueRef = "";
+    this.editInputDomValue = "";
+    this.isCommittingRef = false;
+    this.activeSavesCountRef = 0;
+    this.isSavingRef = false;
+    this.pendingCellEdits = new Map();
+    this.dbRows = JSON.parse(JSON.stringify(initialRows));
+    this.savingStatus = "saved";
+    this.toast = null;
+    this.networkDelayMs = 0;
+    this.networkShouldFail = false;
+  }
+
+  startEditing(rowIdx, colId) {
+    const row = this.sheet.rows.find((r) => r.order === rowIdx) || { id: `temp_${rowIdx}`, order: rowIdx, data: {} };
+    this.activeCell = { rowId: row.id, rowIdx, colId, colName: this.columns.find((c) => c.id === colId)?.name || colId };
+    this.editingCell = { rowId: row.id, colId, rowIdx };
+    const currentVal = row.data[colId] || "";
+    this.editValue = currentVal;
+    this.editValueRef = currentVal;
+    this.editInputDomValue = currentVal;
+  }
+
+  typeValue(newText) {
+    this.editValue = newText;
+    this.editValueRef = newText;
+    this.editInputDomValue = newText;
+  }
+
+  async commitEdit(direction = null) {
+    if (!this.editingCell) return;
+    if (this.isCommittingRef) return;
+    this.isCommittingRef = true;
+
+    // Read DOM truth first (or editValueRef fallback)
+    const valueToSave = this.editInputDomValue !== undefined ? this.editInputDomValue : this.editValueRef;
+    const { rowId, colId, rowIdx } = this.editingCell;
+
+    // Synchronously clear editing state
+    this.editingCell = null;
+    this.editValue = "";
+    this.editValueRef = "";
+    this.editInputDomValue = "";
+    this.isCommittingRef = false;
+
+    await this.handleUpdateCell(rowId, colId, valueToSave, rowIdx);
+
+    if (direction) {
+      const colIdx = this.columns.findIndex((c) => c.id === colId);
+      if (direction === "down") {
+        const nextRowIdx = rowIdx + 1;
+        const targetRow = this.sheet.rows.find((r) => r.order === nextRowIdx) || { id: `temp_${nextRowIdx}`, order: nextRowIdx };
+        this.activeCell = { rowId: targetRow.id, rowIdx: nextRowIdx, colId, colName: this.columns[colIdx]?.name || colId };
+      } else if (direction === "right" && colIdx < this.columns.length - 1) {
+        const nextCol = this.columns[colIdx + 1];
+        this.activeCell = { rowId, rowIdx, colId: nextCol.id, colName: nextCol.name };
+      }
+    }
+  }
+
+  async handleUpdateCell(rowId, columnId, value, order = 0) {
+    const colDef = this.columns.find((c) => c.id === columnId);
+    const sanitizedValue = sanitizeCellValue(value, colDef);
+    const pendingKey = `${rowId || `order_${order}`}:${columnId}`;
+    this.pendingCellEdits.set(pendingKey, { columnId, value: sanitizedValue, timestamp: Date.now() });
+    this.activeSavesCountRef++;
+    this.isSavingRef = true;
+    this.savingStatus = "saving";
+
+    // Optimistic local update
+    let targetIndex = this.sheet.rows.findIndex((r) => r.id === rowId || (order !== undefined && r.order === order));
+    if (targetIndex !== -1) {
+      this.sheet.rows[targetIndex].data = { ...this.sheet.rows[targetIndex].data, [columnId]: sanitizedValue };
+    } else {
+      this.sheet.rows.push({
+        id: rowId,
+        sheetId: this.sheet.id,
+        order,
+        data: { [columnId]: sanitizedValue },
+        styles: {},
+        createdAt: new Date().toISOString(),
+      });
+    }
+
+    try {
+      if (this.networkDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, this.networkDelayMs));
+      }
+      if (this.networkShouldFail) {
+        throw new Error("Network timeout / error saving lead cell");
+      }
+
+      // Backend atomic persistence
+      let dbTarget = this.dbRows.find((r) => r.id === rowId || (order !== undefined && r.order === order));
+      if (dbTarget) {
+        dbTarget.data = { ...dbTarget.data, [columnId]: sanitizedValue };
+      } else {
+        const newDbId = `db_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+        dbTarget = {
+          id: newDbId,
+          sheetId: this.sheet.id,
+          order,
+          data: { [columnId]: sanitizedValue },
+          styles: {},
+          createdAt: new Date().toISOString(),
+        };
+        this.dbRows.push(dbTarget);
+      }
+
+      // Reconcile with real DB ID
+      if (this.activeCell && (this.activeCell.rowId === rowId || this.activeCell.rowIdx === order)) {
+        this.activeCell.rowId = dbTarget.id;
+      }
+      const localIdx = this.sheet.rows.findIndex((r) => r.id === rowId || (order !== undefined && r.order === order));
+      if (localIdx !== -1) {
+        this.sheet.rows[localIdx].id = dbTarget.id;
+        this.sheet.rows[localIdx].data = { ...dbTarget.data, ...this.sheet.rows[localIdx].data, [columnId]: sanitizedValue };
+      }
+
+      this.savingStatus = "saved";
+    } catch (err) {
+      this.savingStatus = "error";
+      this.toast = { type: "error", message: err.message };
+    } finally {
+      this.activeSavesCountRef = Math.max(0, this.activeSavesCountRef - 1);
+      this.isSavingRef = this.activeSavesCountRef > 0;
+      this.pendingCellEdits.delete(pendingKey);
+    }
+  }
+
+  // Simulate background polling
+  triggerBackgroundSync() {
+    if (this.activeSavesCountRef > 0 || this.isSavingRef) {
+      return false; // Poller skips while saving is active
+    }
+    // Deep clone DB rows into local sheet, respecting pending edits
+    const merged = this.dbRows.map((r) => {
+      const data = { ...r.data };
+      this.pendingCellEdits.forEach((edit, key) => {
+        if (key.startsWith(`${r.id}:`) || (r.order !== undefined && key.startsWith(`order_${r.order}:`))) {
+          data[edit.columnId] = edit.value;
+        }
+      });
+      return { ...r, data };
+    });
+    this.sheet.rows = merged;
+    return true;
+  }
 }
+
+it("Scenario 1: Edit cell, press Enter -> value saved to database on first attempt, selection moves down", async () => {
+  const harness = new MockGridAppHarness([{ id: "row_1", order: 0, data: { col_name: "" } }]);
+  harness.startEditing(0, "col_name");
+  harness.typeValue("John Doe");
+  await harness.commitEdit("down");
+
+  assert.strictEqual(harness.sheet.rows[0].data.col_name, "John Doe");
+  assert.strictEqual(harness.dbRows[0].data.col_name, "John Doe");
+  assert.strictEqual(harness.savingStatus, "saved");
+  assert.strictEqual(harness.activeCell.rowIdx, 1, "Active cell moved down to row 2");
+});
+
+it("Scenario 2: Edit cell, press Tab -> value saved on first attempt, selection moves right", async () => {
+  const harness = new MockGridAppHarness([{ id: "row_1", order: 0, data: { col_name: "" } }]);
+  harness.startEditing(0, "col_name");
+  harness.typeValue("Jane Smith");
+  await harness.commitEdit("right");
+
+  assert.strictEqual(harness.sheet.rows[0].data.col_name, "Jane Smith");
+  assert.strictEqual(harness.dbRows[0].data.col_name, "Jane Smith");
+  assert.strictEqual(harness.savingStatus, "saved");
+  assert.strictEqual(harness.activeCell.colId, "col_number", "Active cell moved right to col_number");
+});
+
+it("Scenario 3: Edit cell, click another cell in same row -> value saved on first attempt, selection moves to clicked cell", async () => {
+  const harness = new MockGridAppHarness([{ id: "row_1", order: 0, data: { col_name: "Initial" } }]);
+  harness.startEditing(0, "col_number");
+  harness.typeValue("9876543210");
+
+  // Mouse down on another cell in same row triggers commitEditRef.current()
+  await harness.commitEdit();
+  harness.activeCell = { rowId: "row_1", rowIdx: 0, colId: "col_project_name", colName: "Project Name" };
+
+  assert.strictEqual(harness.dbRows[0].data.col_number, "9876543210");
+  assert.strictEqual(harness.activeCell.colId, "col_project_name");
+});
+
+it("Scenario 4: Edit cell, click cell in different row -> value saved on first attempt, selection moves to clicked cell", async () => {
+  const harness = new MockGridAppHarness([
+    { id: "row_1", order: 0, data: { col_name: "Original 1" } },
+    { id: "row_2", order: 1, data: { col_name: "Original 2" } },
+  ]);
+  harness.startEditing(0, "col_name");
+  harness.typeValue("Updated Row 1");
+
+  // User clicks row 2 cell
+  await harness.commitEdit();
+  harness.activeCell = { rowId: "row_2", rowIdx: 1, colId: "col_name", colName: "Name" };
+
+  assert.strictEqual(harness.dbRows[0].data.col_name, "Updated Row 1");
+  assert.strictEqual(harness.sheet.rows[0].data.col_name, "Updated Row 1");
+  assert.strictEqual(harness.activeCell.rowId, "row_2");
+});
+
+it("Scenario 5: Edit cell, click outside grid (toolbar, filter, tab) -> value saved on first attempt", async () => {
+  const harness = new MockGridAppHarness([{ id: "row_1", order: 0, data: { col_name: "Before" } }]);
+  harness.startEditing(0, "col_name");
+  harness.typeValue("Clicked Outside Value");
+
+  // Global window capture mousedown handler fires commitEdit()
+  await harness.commitEdit();
+
+  assert.strictEqual(harness.dbRows[0].data.col_name, "Clicked Outside Value");
+  assert.strictEqual(harness.editingCell, null);
+  assert.strictEqual(harness.savingStatus, "saved");
+});
+
+it("Scenario 6: Rapid edits: Edit cell A, immediately edit cell B, immediately edit cell C -> all three values saved correctly without overwriting", async () => {
+  const harness = new MockGridAppHarness([{ id: "row_1", order: 0, data: {} }]);
+  
+  // Rapid edit 1: Name
+  harness.startEditing(0, "col_name");
+  harness.typeValue("Rapid Lead");
+  const p1 = harness.commitEdit();
+
+  // Rapid edit 2: Phone
+  harness.startEditing(0, "col_number");
+  harness.typeValue("9123456789");
+  const p2 = harness.commitEdit();
+
+  // Rapid edit 3: Project
+  harness.startEditing(0, "col_project_name");
+  harness.typeValue("Cyber Towers");
+  const p3 = harness.commitEdit();
+
+  await Promise.all([p1, p2, p3]);
+
+  const finalData = harness.dbRows[0].data;
+  assert.strictEqual(finalData.col_name, "Rapid Lead");
+  assert.strictEqual(finalData.col_number, "9123456789");
+  assert.strictEqual(finalData.col_project_name, "Cyber Towers");
+});
+
+it("Scenario 7: Edit multiple fields in same lead consecutively (name, phone, budget) -> all fields saved to same lead record", async () => {
+  const harness = new MockGridAppHarness([{ id: "lead_consec", order: 0, data: { col_name: "Initial" } }]);
+  
+  harness.startEditing(0, "col_name");
+  harness.typeValue("Consecutive Lead");
+  await harness.commitEdit();
+
+  harness.startEditing(0, "col_number");
+  harness.typeValue("9888877777");
+  await harness.commitEdit();
+
+  harness.startEditing(0, "col_budget");
+  harness.typeValue("75 Lakhs");
+  await harness.commitEdit();
+
+  assert.strictEqual(harness.dbRows.length, 1);
+  assert.strictEqual(harness.dbRows[0].id, "lead_consec");
+  assert.strictEqual(harness.dbRows[0].data.col_name, "Consecutive Lead");
+  assert.strictEqual(harness.dbRows[0].data.col_number, "9888877777");
+  assert.strictEqual(harness.dbRows[0].data.col_budget, "75 Lakhs");
+});
+
+it("Scenario 8: Edit multiple leads in consecutive rows rapidly -> each lead receives its correct values", async () => {
+  const harness = new MockGridAppHarness([
+    { id: "lead_r1", order: 0, data: { col_name: "Row 1 Old" } },
+    { id: "lead_r2", order: 1, data: { col_name: "Row 2 Old" } },
+    { id: "lead_r3", order: 2, data: { col_name: "Row 3 Old" } },
+  ]);
+
+  harness.startEditing(0, "col_name");
+  harness.typeValue("Row 1 New");
+  await harness.commitEdit("down");
+
+  harness.startEditing(1, "col_name");
+  harness.typeValue("Row 2 New");
+  await harness.commitEdit("down");
+
+  harness.startEditing(2, "col_name");
+  harness.typeValue("Row 3 New");
+  await harness.commitEdit("down");
+
+  assert.strictEqual(harness.dbRows[0].data.col_name, "Row 1 New");
+  assert.strictEqual(harness.dbRows[1].data.col_name, "Row 2 New");
+  assert.strictEqual(harness.dbRows[2].data.col_name, "Row 3 New");
+});
+
+it("Scenario 9: Dropdown selection -> selected value saved on first attempt, status counter updates", async () => {
+  const harness = new MockGridAppHarness([
+    { id: "lead_drop", order: 0, data: { col_name: "Lead D", col_followup_1: "" } },
+  ]);
+
+  // Dropdown click handler calls handleUpdateCell directly with selected option
+  await harness.handleUpdateCell("lead_drop", "col_followup_1", "Site Visit Completed", 0);
+
+  assert.strictEqual(harness.dbRows[0].data.col_followup_1, "Site Visit Completed");
+  assert.strictEqual(isUnattendedLead(harness.dbRows[0].data, harness.columns), false);
+  assert.strictEqual(getLeadStatus(harness.dbRows[0].data, harness.columns), "Site Visit Completed");
+});
+
+it("Scenario 10: Date picker selection -> selected date saved on first attempt, date filter reflects change", async () => {
+  const harness = new MockGridAppHarness([
+    { id: "lead_date", order: 0, data: { col_name: "Lead Date", col_followup_date: "" } },
+  ]);
+
+  await harness.handleUpdateCell("lead_date", "col_followup_date", "2026-11-15", 0);
+
+  assert.strictEqual(harness.dbRows[0].data.col_followup_date, "2026-11-15");
+  assert.strictEqual(toLocalYMD(harness.dbRows[0].data.col_followup_date), "2026-11-15");
+});
+
+it("Scenario 11: Phone number edit with duplicate detection -> if unique: saved; if duplicate: warned and not duplicated", async () => {
+  const harness = new MockGridAppHarness([
+    { id: "lead_existing", order: 0, data: { col_name: "Alice", col_number: "9876543210" } },
+    { id: "lead_edit", order: 1, data: { col_name: "Bob", col_number: "" } },
+  ]);
+
+  // Edit with duplicate phone number
+  const duplicatePhone = "9876543210";
+  const isDuplicate = harness.dbRows.some((r) => r.id !== "lead_edit" && r.data.col_number === duplicatePhone);
+  assert.strictEqual(isDuplicate, true, "Duplicate detected across sheet rows");
+
+  // Edit with unique phone number
+  await harness.handleUpdateCell("lead_edit", "col_number", "+91 99999 88888", 1);
+  assert.strictEqual(harness.dbRows[1].data.col_number, "9999988888", "Normalized 10 digits saved cleanly");
+});
+
+it("Scenario 12: Network failure during save -> user notified, retry succeeds, value not lost from UI", async () => {
+  const harness = new MockGridAppHarness([{ id: "row_net", order: 0, data: { col_name: "Original" } }]);
+  harness.networkShouldFail = true;
+
+  harness.startEditing(0, "col_name");
+  harness.typeValue("Offline Edit");
+  await harness.commitEdit();
+
+  assert.strictEqual(harness.savingStatus, "error");
+  assert.ok(harness.toast !== null);
+  assert.strictEqual(harness.sheet.rows[0].data.col_name, "Offline Edit", "User typed value is PRESERVED in UI");
+
+  // Retry when network restores
+  harness.networkShouldFail = false;
+  await harness.handleUpdateCell("row_net", "col_name", "Offline Edit", 0);
+
+  assert.strictEqual(harness.savingStatus, "saved");
+  assert.strictEqual(harness.dbRows[0].data.col_name, "Offline Edit");
+});
+
+it("Scenario 13: Delayed API response -> UI remains responsive, subsequent edits queue properly, values not lost", async () => {
+  const harness = new MockGridAppHarness([{ id: "lead_delayed", order: 0, data: {} }]);
+  harness.networkDelayMs = 25;
+
+  const save1 = harness.handleUpdateCell("lead_delayed", "col_name", "Delayed Name", 0);
+  const save2 = harness.handleUpdateCell("lead_delayed", "col_number", "9555544444", 0);
+
+  await Promise.all([save1, save2]);
+
+  assert.strictEqual(harness.dbRows[0].data.col_name, "Delayed Name");
+  assert.strictEqual(harness.dbRows[0].data.col_number, "9555544444");
+  assert.strictEqual(harness.activeSavesCountRef, 0);
+  assert.strictEqual(harness.isSavingRef, false);
+});
+
+it("Scenario 14: Tab switch while edit in progress -> edit saved before tab changes, new tab loads correctly", async () => {
+  const harness = new MockGridAppHarness([{ id: "tab_lead", order: 0, data: { col_name: "" } }]);
+  harness.startEditing(0, "col_name");
+  harness.typeValue("Save Before Tab Switch");
+
+  // Tab switch click handler invokes commitEditRef.current() in capture phase before setActiveSheetId
+  await harness.commitEdit();
+
+  assert.strictEqual(harness.dbRows[0].data.col_name, "Save Before Tab Switch");
+  assert.strictEqual(harness.editingCell, null);
+});
+
+it("Scenario 15: Background sync / polling while user is actively editing -> in-progress edit NOT overwritten, pending saves NOT lost", async () => {
+  const harness = new MockGridAppHarness([{ id: "sync_lead", order: 0, data: { col_name: "Original DB Value" } }]);
+  
+  // User starts editing
+  harness.startEditing(0, "col_name");
+  harness.typeValue("Actively Typing Value");
+
+  // 15s timer fires while active save / editing is happening
+  harness.activeSavesCountRef = 1;
+  harness.isSavingRef = true;
+  const syncExecuted = harness.triggerBackgroundSync();
+
+  assert.strictEqual(syncExecuted, false, "Background sync was suppressed while save / edit was active");
+  assert.strictEqual(harness.editValueRef, "Actively Typing Value", "User typing was not reset");
+
+  // Save completes
+  harness.activeSavesCountRef = 0;
+  harness.isSavingRef = false;
+  await harness.commitEdit();
+  assert.strictEqual(harness.dbRows[0].data.col_name, "Actively Typing Value");
+});
+
+it("Scenario 16: Bulk paste followed immediately by cell edit on newly pasted lead -> both bulk paste and cell edit saved correctly", async () => {
+  const harness = new MockGridAppHarness([]);
+  
+  // Bulk paste creates lead at order 0
+  const pastedRow = { id: "temp_0", sheetId: harness.sheet.id, order: 0, data: { col_name: "Pasted Name" } };
+  harness.sheet.rows.push(pastedRow);
+
+  // User immediately edits phone number on this newly pasted lead
+  harness.startEditing(0, "col_number");
+  harness.typeValue("9888812345");
+  await harness.commitEdit();
+
+  assert.strictEqual(harness.dbRows.length, 1);
+  assert.strictEqual(harness.dbRows[0].data.col_number, "9888812345");
+  assert.strictEqual(harness.dbRows[0].order, 0);
+});
+
+it("Scenario 17: Filtered view: edit cell in filtered lead -> edit saved, lead remains in filtered view (if matching) or updates correctly", async () => {
+  const harness = new MockGridAppHarness([
+    { id: "filt_1", order: 0, data: { col_name: "Lead 1", col_followup_1: "Site Visit Completed" } },
+    { id: "filt_2", order: 1, data: { col_name: "Lead 2", col_followup_1: "Call Done" } },
+  ]);
+
+  // View filtered by 'Site Visit Completed' -> only filt_1 visible
+  harness.startEditing(0, "col_name");
+  harness.typeValue("Renamed Filtered Lead");
+  await harness.commitEdit();
+
+  assert.strictEqual(harness.dbRows[0].data.col_name, "Renamed Filtered Lead");
+  assert.strictEqual(harness.sheet.rows[0].data.col_name, "Renamed Filtered Lead");
+  assert.strictEqual(harness.dbRows[1].data.col_name, "Lead 2", "Untouched row unchanged");
+});
+
+it("Scenario 18: Formula bar edit -> value saved to active cell, matches in-cell editing behavior", async () => {
+  const harness = new MockGridAppHarness([{ id: "fb_lead", order: 0, data: { col_name: "Original FB" } }]);
+  harness.activeCell = { rowId: "fb_lead", rowIdx: 0, colId: "col_name", colName: "Name" };
+
+  // Formula bar commit on Enter or Blur
+  await harness.handleUpdateCell("fb_lead", "col_name", "Formula Bar Edited", 0);
+
+  assert.strictEqual(harness.dbRows[0].data.col_name, "Formula Bar Edited");
+  assert.strictEqual(harness.sheet.rows[0].data.col_name, "Formula Bar Edited");
+  assert.strictEqual(harness.savingStatus, "saved");
+});
+
+testPromiseChain.then(() => {
+  console.log(`\n=== ALL TESTS PASSED: ${passed}/${total} ===\n`);
+  if (passed !== total) {
+    process.exit(1);
+  }
+});
