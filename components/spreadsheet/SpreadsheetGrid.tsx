@@ -126,7 +126,11 @@ const GridCell = ({
   onStartEditing,
   onClearCell,
 }: GridCellProps) => {
+  const colWidth = col.width || 180;
   const inlineStyle: React.CSSProperties = {
+    width: `${colWidth}px`,
+    minWidth: `${colWidth}px`,
+    maxWidth: `${colWidth}px`,
     fontWeight: cellStyle?.bold ? "bold" : "normal",
     fontStyle: cellStyle?.italic ? "italic" : "normal",
     color: cellStyle?.color || "#111827",
@@ -297,6 +301,7 @@ const MemoizedGridCell = React.memo(GridCell, (prev, next) => {
   if (prev.isBottomRightCorner !== next.isBottomRightCorner) return false;
   if (prev.cellStyle !== next.cellStyle) return false;
   if (prev.col !== next.col) return false;
+  if (prev.col?.width !== next.col?.width) return false;
   return true;
 });
 
@@ -371,6 +376,7 @@ const GridRow = ({
     >
       {/* Sticky Row Number (1 to 1000+) */}
       <td
+        style={{ width: "56px", minWidth: "56px", maxWidth: "56px" }}
         className={`sticky left-0 z-10 text-center text-[11px] font-mono select-none cursor-pointer border-r border-b border-slate-300 transition-colors ${
           isRowSelected
             ? "bg-blue-100 font-bold text-blue-900 border-r-2 border-r-blue-600"
@@ -618,6 +624,53 @@ export function SpreadsheetGrid({
 
   // Column resizing state
   const [resizingCol, setResizingCol] = useState<{ id: string; startX: number; startWidth: number } | null>(null);
+  const [liveColWidths, setLiveColWidths] = useState<Record<string, number>>({});
+  const resizingColRef = useRef<{ id: string; startX: number; startWidth: number; currentWidth: number } | null>(null);
+
+  // Constants for fixed geometry
+  const ROW_HEADER_WIDTH = 56;
+  const DEFAULT_COLUMN_WIDTH = 180;
+
+  // Active columns with live resize override (guarantees single source of truth)
+  const currentColumns = useMemo(() => {
+    if (Object.keys(liveColWidths).length === 0) return sheet.columns;
+    return sheet.columns.map((c) => {
+      const liveW = liveColWidths[c.id];
+      return liveW !== undefined ? { ...c, width: liveW } : c;
+    });
+  }, [sheet.columns, liveColWidths]);
+
+  // Authoritative total table width: strictly locks table-layout: fixed
+  const totalTableWidth = useMemo(() => {
+    return (
+      ROW_HEADER_WIDTH +
+      currentColumns.reduce(
+        (sum, col) => sum + (col.width || DEFAULT_COLUMN_WIDTH),
+        0
+      )
+    );
+  }, [currentColumns]);
+
+  // Reset live column overrides on sheet switch
+  useEffect(() => {
+    setLiveColWidths({});
+  }, [sheet.id]);
+
+  // Synchronize live overrides when sheet.columns is updated from backend
+  useEffect(() => {
+    setLiveColWidths((prev) => {
+      if (Object.keys(prev).length === 0) return prev;
+      let hasChanges = false;
+      const next = { ...prev };
+      for (const col of sheet.columns) {
+        if (next[col.id] !== undefined && col.width === next[col.id]) {
+          delete next[col.id];
+          hasChanges = true;
+        }
+      }
+      return hasChanges ? next : prev;
+    });
+  }, [sheet.columns]);
 
   // Column drag-and-drop reordering state (draggable & adjustable side-to-side)
   const [draggedColIdx, setDraggedColIdx] = useState<number | null>(null);
@@ -1139,40 +1192,73 @@ export function SpreadsheetGrid({
     }
   };
 
-  // Column resize logic
+  // Column resize logic (optimistic 60fps drag with single-commit persistence)
   const startColumnResize = (e: React.MouseEvent, col: ColumnDef) => {
     e.stopPropagation();
     e.preventDefault();
+    const currentW = liveColWidths[col.id] || col.width || DEFAULT_COLUMN_WIDTH;
+    const resizeInfo = {
+      id: col.id,
+      startX: e.clientX,
+      startWidth: currentW,
+      currentWidth: currentW,
+    };
+    resizingColRef.current = resizeInfo;
     setResizingCol({
       id: col.id,
       startX: e.clientX,
-      startWidth: col.width || 180,
+      startWidth: currentW,
     });
   };
 
   useEffect(() => {
     if (!resizingCol) return;
 
+    const originalCursor = document.body.style.cursor;
+    const originalUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+
     const handleMouseMove = (e: MouseEvent) => {
-      const delta = e.clientX - resizingCol.startX;
-      const newWidth = Math.max(100, resizingCol.startWidth + delta);
-      const updatedCols = sheet.columns.map((c) =>
-        c.id === resizingCol.id ? { ...c, width: newWidth } : c
-      );
-      onUpdateColumns(updatedCols);
+      if (!resizingColRef.current) return;
+      const delta = e.clientX - resizingColRef.current.startX;
+      const newWidth = Math.max(80, resizingColRef.current.startWidth + delta);
+      resizingColRef.current.currentWidth = newWidth;
+      setLiveColWidths((prev) => {
+        if (prev[resizingColRef.current!.id] === newWidth) return prev;
+        return {
+          ...prev,
+          [resizingColRef.current!.id]: newWidth,
+        };
+      });
     };
 
     const handleMouseUp = () => {
+      const info = resizingColRef.current;
+      resizingColRef.current = null;
       setResizingCol(null);
+      document.body.style.cursor = originalCursor;
+      document.body.style.userSelect = originalUserSelect;
+
+      if (info && info.currentWidth !== info.startWidth) {
+        const updatedCols = sheetRef.current.columns.map((c) =>
+          c.id === info.id ? { ...c, width: info.currentWidth } : c
+        );
+        onUpdateColumns(updatedCols).catch((err) => {
+          console.error("Failed to persist resized column:", err);
+        });
+      }
     };
 
     document.addEventListener("mousemove", handleMouseMove);
     document.addEventListener("mouseup", handleMouseUp);
     return () => {
+      document.body.style.cursor = originalCursor;
+      document.body.style.userSelect = originalUserSelect;
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [resizingCol, sheet.columns, onUpdateColumns]);
+  }, [resizingCol, onUpdateColumns]);
 
   // Column drag-and-drop reordering handlers (Draggable side-to-side)
   const handleColDragStart = (e: React.DragEvent, colIdx: number) => {
@@ -1880,14 +1966,37 @@ export function SpreadsheetGrid({
       className="flex-1 w-full h-[calc(100vh-200px)] min-h-[400px] overflow-y-auto overflow-x-auto bg-slate-100 outline-none relative select-none"
       style={{ height: "calc(100vh - 200px)" }}
     >
-      <div className="min-w-max pb-24 select-none">
-        <table className="border-collapse table-fixed bg-white text-slate-800 text-xs shadow-xs select-none">
+      <div
+        className="pb-24 select-none"
+        style={{
+          width: `${totalTableWidth}px`,
+          minWidth: `${totalTableWidth}px`,
+        }}
+      >
+        <table
+          style={{
+            width: `${totalTableWidth}px`,
+            minWidth: `${totalTableWidth}px`,
+            tableLayout: "fixed",
+          }}
+          className="border-collapse table-fixed bg-white text-slate-800 text-xs shadow-xs select-none"
+        >
           {/* Column definitions & widths */}
           <colgroup>
-            <col style={{ width: "56px" }} />
-            {sheet.columns.map((col) => (
-              <col key={col.id} style={{ width: `${col.width || 180}px` }} />
-            ))}
+            <col style={{ width: `${ROW_HEADER_WIDTH}px`, minWidth: `${ROW_HEADER_WIDTH}px`, maxWidth: `${ROW_HEADER_WIDTH}px` }} />
+            {currentColumns.map((col) => {
+              const colWidth = col.width || DEFAULT_COLUMN_WIDTH;
+              return (
+                <col
+                  key={col.id}
+                  style={{
+                    width: `${colWidth}px`,
+                    minWidth: `${colWidth}px`,
+                    maxWidth: `${colWidth}px`,
+                  }}
+                />
+              );
+            })}
           </colgroup>
 
           {/* Sticky Table Header */}
@@ -1896,14 +2005,16 @@ export function SpreadsheetGrid({
               {/* Row number top-left corner (Click to select all cells in sheet) */}
               <th
                 onClick={handleSelectAllSheet}
-                className="sticky left-0 z-30 bg-slate-200 hover:bg-slate-300 border-b-2 border-r border-slate-300 text-slate-600 font-bold text-center text-[11px] p-0 w-[56px] cursor-pointer transition-colors select-none"
+                style={{ width: `${ROW_HEADER_WIDTH}px`, minWidth: `${ROW_HEADER_WIDTH}px`, maxWidth: `${ROW_HEADER_WIDTH}px` }}
+                className="sticky left-0 z-30 bg-slate-200 hover:bg-slate-300 border-b-2 border-r border-slate-300 text-slate-600 font-bold text-center text-[11px] p-0 cursor-pointer transition-colors select-none"
                 title="Click to select all cells in sheet"
               >
                 #
               </th>
 
-              {/* 11 Columns */}
-              {sheet.columns.map((col, colIdx) => {
+              {/* Columns */}
+              {currentColumns.map((col, colIdx) => {
+                const colWidth = col.width || DEFAULT_COLUMN_WIDTH;
                 const isNavy = col.headerStyle === "navy" || col.name.includes("Follow Up");
                 const isGold = !isNavy;
 
@@ -1928,6 +2039,11 @@ export function SpreadsheetGrid({
                 return (
                   <th
                     key={col.id}
+                    style={{
+                      width: `${colWidth}px`,
+                      minWidth: `${colWidth}px`,
+                      maxWidth: `${colWidth}px`,
+                    }}
                     draggable={!resizingCol && renamingColId === null}
                     onDragStart={(e) => handleColDragStart(e, colIdx)}
                     onDragOver={(e) => handleColDragOver(e, colIdx)}
@@ -2027,14 +2143,14 @@ export function SpreadsheetGrid({
             {/* Top Spacer (only in unfiltered 1,000-row mode) */}
             {!isFiltered && topSpacerHeight > 0 && (
               <tr style={{ height: `${topSpacerHeight}px` }}>
-                <td colSpan={sheet.columns.length + 1} className="border-b border-slate-300" />
+                <td colSpan={currentColumns.length + 1} className="border-b border-slate-300 p-0" />
               </tr>
             )}
 
             {/* Empty state when filtered and no leads match */}
             {isFiltered && filteredRows.length === 0 && (
               <tr>
-                <td colSpan={sheet.columns.length + 1} className="py-16 text-center bg-white border-b border-slate-200">
+                <td colSpan={currentColumns.length + 1} className="py-16 text-center bg-white border-b border-slate-200">
                   <div className="flex flex-col items-center justify-center gap-2 max-w-sm mx-auto text-slate-500">
                     <div className="h-12 w-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center">
                       <Calendar className="h-6 w-6" />
@@ -2065,7 +2181,7 @@ export function SpreadsheetGrid({
                     rowIdx >= selectionRange.startRow &&
                     rowIdx <= selectionRange.endRow &&
                     selectionRange.startCol === 0 &&
-                    selectionRange.endCol >= (sheet.columns.length - 1);
+                    selectionRange.endCol >= (currentColumns.length - 1);
 
                   return (
                     <MemoizedGridRow
@@ -2073,7 +2189,7 @@ export function SpreadsheetGrid({
                       rowIdx={rowIdx}
                       serialNumber={serialNumber}
                       row={row}
-                      columns={sheet.columns}
+                      columns={currentColumns}
                       isRowSelected={isRowSelected}
                       activeCell={activeCell}
                       selectionRange={selectionRange}
@@ -2107,7 +2223,7 @@ export function SpreadsheetGrid({
                     rowIdx >= selectionRange.startRow &&
                     rowIdx <= selectionRange.endRow &&
                     selectionRange.startCol === 0 &&
-                    selectionRange.endCol >= (sheet.columns.length - 1);
+                    selectionRange.endCol >= (currentColumns.length - 1);
 
                   return (
                     <MemoizedGridRow
@@ -2115,7 +2231,7 @@ export function SpreadsheetGrid({
                       rowIdx={rowIdx}
                       serialNumber={serialNumber}
                       row={row}
-                      columns={sheet.columns}
+                      columns={currentColumns}
                       isRowSelected={isRowSelected}
                       activeCell={activeCell}
                       selectionRange={selectionRange}
@@ -2144,7 +2260,7 @@ export function SpreadsheetGrid({
             {/* Bottom Spacer (only in unfiltered 1,000-row mode) */}
             {!isFiltered && bottomSpacerHeight > 0 && (
               <tr style={{ height: `${bottomSpacerHeight}px` }}>
-                <td colSpan={sheet.columns.length + 1} className="border-b border-slate-300" />
+                <td colSpan={currentColumns.length + 1} className="border-b border-slate-300 p-0" />
               </tr>
             )}
           </tbody>

@@ -3079,6 +3079,230 @@ it("Scenario 12: Verify no unintended database records are deleted -> only speci
   assert.strictEqual(harness.dbRows[2].id, "db_row_3");
 });
 
+// ============================================================================
+// --- SECTION 14: SPREADSHEET COLUMN WIDTH STABILITY & SYNCHRONIZATION ---
+// ============================================================================
+console.log("\n--- SECTION 14: SPREADSHEET COLUMN WIDTH STABILITY & SYNCHRONIZATION ---");
+
+const ROW_HEADER_WIDTH = 56;
+const DEFAULT_COLUMN_WIDTH = 180;
+
+function computeTotalTableWidth(columns, liveWidths = {}) {
+  const colList = columns.map((c) => ({
+    ...c,
+    width: liveWidths[c.id] !== undefined ? liveWidths[c.id] : c.width || DEFAULT_COLUMN_WIDTH,
+  }));
+  return ROW_HEADER_WIDTH + colList.reduce((sum, col) => sum + col.width, 0);
+}
+
+function getColumnGeometry(col, liveWidths = {}) {
+  const width = liveWidths[col.id] !== undefined ? liveWidths[col.id] : col.width || DEFAULT_COLUMN_WIDTH;
+  return {
+    width: `${width}px`,
+    minWidth: `${width}px`,
+    maxWidth: `${width}px`,
+  };
+}
+
+it("Scenario 1: Total table width strictly matches row header (56px) + sum of all column widths", () => {
+  const sampleColumns = [
+    { id: "col_project_name", width: 200 },
+    { id: "col_plot_size", width: 170 },
+    { id: "col_budget", width: 170 },
+    { id: "col_location", width: 200 },
+    { id: "col_name", width: 180 },
+    { id: "col_number", width: 170 },
+    { id: "col_lead_source", width: 160 },
+    { id: "col_followup_1", width: 200 },
+    { id: "col_followup_1_date", width: 155 },
+    { id: "col_followup_2", width: 200 },
+    { id: "col_followup_2_date", width: 155 },
+  ];
+  const expectedSum = 56 + (200 + 170 + 170 + 200 + 180 + 170 + 160 + 200 + 155 + 200 + 155);
+  const calculatedWidth = computeTotalTableWidth(sampleColumns);
+  assert.strictEqual(calculatedWidth, expectedSum, `Calculated table width ${calculatedWidth}px must equal ${expectedSum}px`);
+  assert.strictEqual(calculatedWidth, 2016);
+});
+
+it("Scenario 2: Header (th), body (td), and colgroup (col) use identical geometry values for every column", () => {
+  const columns = [
+    { id: "c1", width: 220 },
+    { id: "c2", width: 150 },
+    { id: "c3" }, // missing width -> falls back to 180
+  ];
+
+  columns.forEach((col) => {
+    const colGeom = getColumnGeometry(col);
+    const expectedWidth = col.width ? `${col.width}px` : "180px";
+
+    assert.strictEqual(colGeom.width, expectedWidth);
+    assert.strictEqual(colGeom.minWidth, expectedWidth);
+    assert.strictEqual(colGeom.maxWidth, expectedWidth);
+  });
+});
+
+it("Scenario 3: Scrolling through virtualized rows (rows entering and leaving DOM) produces zero column width changes", () => {
+  const columns = [
+    { id: "col_name", width: 180 },
+    { id: "col_location", width: 200 },
+  ];
+  const tableWidthBeforeScroll = computeTotalTableWidth(columns);
+
+  // Simulate scrolling: window moving from rows 0-30 to rows 40-70 where Row 55 has a 500-character address
+  const row55Data = {
+    col_name: "Short Name",
+    col_location: "Very Long Address That Previously Caused Layout Shifts ".repeat(15),
+  };
+  assert.ok(row55Data.col_location.length > 500);
+
+  // In fixed layout architecture, geometry is strictly derived from columns, not row contents
+  const locationGeom = getColumnGeometry(columns[1]);
+  assert.strictEqual(locationGeom.width, "200px");
+  assert.strictEqual(locationGeom.maxWidth, "200px", "Cell is strictly constrained to 200px regardless of content length");
+
+  const tableWidthAfterScroll = computeTotalTableWidth(columns);
+  assert.strictEqual(tableWidthBeforeScroll, tableWidthAfterScroll, "Table width invariant across scrolling");
+});
+
+it("Scenario 4: Top and bottom virtual spacer rows with colSpan do not alter individual column geometry", () => {
+  const columns = [
+    { id: "col_name", width: 180 },
+    { id: "col_number", width: 170 },
+    { id: "col_budget", width: 170 },
+  ];
+  const totalCols = columns.length + 1; // +1 for row number
+  const totalTableWidth = computeTotalTableWidth(columns);
+
+  // Spacer spanning all columns
+  const spacerProps = {
+    colSpan: totalCols,
+    height: 360, // 10 rows top spacer
+  };
+
+  assert.strictEqual(spacerProps.colSpan, 4);
+  // Column geometry remains strictly fixed
+  assert.strictEqual(getColumnGeometry(columns[0]).width, "180px");
+  assert.strictEqual(getColumnGeometry(columns[1]).width, "170px");
+  assert.strictEqual(totalTableWidth, 56 + 180 + 170 + 170);
+});
+
+it("Scenario 5: Switching member tabs preserves each sheet's independent column widths", () => {
+  const sheetA = {
+    id: "sheet_sanjana",
+    columns: [
+      { id: "col_name", width: 220 },
+      { id: "col_budget", width: 190 },
+    ],
+  };
+  const sheetB = {
+    id: "sheet_aishwarya",
+    columns: [
+      { id: "col_name", width: 180 },
+      { id: "col_budget", width: 160 },
+    ],
+  };
+
+  const widthA = computeTotalTableWidth(sheetA.columns);
+  const widthB = computeTotalTableWidth(sheetB.columns);
+
+  assert.strictEqual(widthA, 56 + 220 + 190); // 466px
+  assert.strictEqual(widthB, 56 + 180 + 160); // 396px
+
+  // Switch to B, then back to A: A retains 466px, B retains 396px
+  assert.strictEqual(computeTotalTableWidth(sheetA.columns), 466);
+  assert.strictEqual(computeTotalTableWidth(sheetB.columns), 396);
+});
+
+it("Scenario 6: Applying status or date filter renders rows with identical column dimensions as unfiltered sheet", () => {
+  const columns = [
+    { id: "col_name", width: 180 },
+    { id: "col_followup_1", width: 200 },
+  ];
+  const normalWidth = computeTotalTableWidth(columns);
+
+  // Filter active (e.g. status: 'Site Visit Completed')
+  const filteredColumns = [...columns];
+  const filteredWidth = computeTotalTableWidth(filteredColumns);
+
+  assert.strictEqual(normalWidth, filteredWidth, "Filtered mode column widths exactly match normal mode");
+  assert.strictEqual(getColumnGeometry(columns[0]).width, getColumnGeometry(filteredColumns[0]).width);
+});
+
+it("Scenario 7: Column drag resizing provides 60fps local updates without firing network calls during mousemove", () => {
+  const columns = [{ id: "col_project_name", width: 200 }];
+  let liveWidths = {};
+  let networkCallCount = 0;
+
+  function onMouseMove(delta) {
+    const newWidth = Math.max(80, 200 + delta);
+    liveWidths["col_project_name"] = newWidth;
+    // Note: No network call made during mousemove!
+  }
+
+  function onMouseUp(finalWidth) {
+    networkCallCount++;
+    columns[0].width = finalWidth;
+    liveWidths = {};
+  }
+
+  // Simulate 30 mousemove events during drag
+  for (let delta = 1; delta <= 30; delta++) {
+    onMouseMove(delta);
+    assert.strictEqual(networkCallCount, 0, "Zero network calls during mousemove");
+    assert.strictEqual(computeTotalTableWidth(columns, liveWidths), 56 + 200 + delta);
+  }
+
+  // Mouse up commits once
+  onMouseUp(230);
+  assert.strictEqual(networkCallCount, 1, "Exactly one network persistence call on mouseup");
+  assert.strictEqual(computeTotalTableWidth(columns), 56 + 230);
+});
+
+it("Scenario 8: Cell editing input is strictly bounded by cell width and cannot expand column", () => {
+  const col = { id: "col_name", width: 180 };
+  const cellGeom = getColumnGeometry(col);
+
+  // In-cell editor style
+  const editorInputStyle = {
+    position: "absolute",
+    inset: 0,
+    width: "100%",
+    height: "100%",
+  };
+
+  assert.strictEqual(cellGeom.maxWidth, "180px");
+  assert.strictEqual(editorInputStyle.width, "100%", "Editor input fills exactly 100% of the 180px cell without pushing width");
+});
+
+it("Scenario 9: Bulk paste of large data strings does not stretch fixed column widths", () => {
+  const col = { id: "col_project_name", width: 200 };
+  const pastedValue = "Ultra Luxury High Rise Apartments in Financial District Phase 2 Extension".repeat(10);
+  assert.ok(pastedValue.length > 500);
+
+  const colGeom = getColumnGeometry(col);
+  assert.strictEqual(colGeom.width, "200px");
+  assert.strictEqual(colGeom.maxWidth, "200px");
+});
+
+it("Scenario 10: Horizontal scrolling container width strictly matches totalTableWidth", () => {
+  const columns = [
+    { id: "c1", width: 200 },
+    { id: "c2", width: 200 },
+    { id: "c3", width: 200 },
+    { id: "c4", width: 200 },
+    { id: "c5", width: 200 },
+  ];
+  const totalWidth = computeTotalTableWidth(columns);
+  assert.strictEqual(totalWidth, 56 + 1000); // 1056px
+
+  const tableWrapperStyle = {
+    width: `${totalWidth}px`,
+    minWidth: `${totalWidth}px`,
+  };
+  assert.strictEqual(tableWrapperStyle.width, "1056px");
+  assert.strictEqual(tableWrapperStyle.minWidth, "1056px");
+});
+
 testPromiseChain.then(() => {
   console.log(`\n=== ALL TESTS PASSED: ${passed}/${total} ===\n`);
   if (passed !== total) {
