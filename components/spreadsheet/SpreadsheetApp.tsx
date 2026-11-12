@@ -828,7 +828,11 @@ export function SpreadsheetApp() {
           return {
             ...prev,
             rows: prev.rows.map((r) => {
-              if (r.id === rowId || r.id === targetRowId || (rowOrder !== undefined && r.order === rowOrder)) {
+              const isTarget =
+                r.id === rowId ||
+                r.id === targetRowId ||
+                (rowId.startsWith("temp_") && rowOrder !== undefined && r.order === rowOrder);
+              if (isTarget) {
                 // Collect any pending edits for this row
                 const pendingEditsOnThisRow: Record<string, any> = {};
                 pendingCellEditsRef.current.forEach((edit, key) => {
@@ -878,8 +882,9 @@ export function SpreadsheetApp() {
     isSavingRef.current = true;
     const currentBatchRequestId = ++refreshRequestIdRef.current;
 
-    // If active filters or search query are set, clear them so all newly pasted leads are visible in the full sheet
-    if (statusFilter || dateFilter || searchQuery) {
+    // If active filters or search query are set, only clear them when NEW leads are being pasted
+    const isNewLeadsPaste = rows.some((r) => !r.id || r.id.startsWith("temp_"));
+    if (isNewLeadsPaste && (statusFilter || dateFilter || searchQuery)) {
       setStatusFilter(null);
       setDateFilter(null);
       setSearchQuery("");
@@ -1196,31 +1201,79 @@ export function SpreadsheetApp() {
     }
   };
 
-  // 7. Delete Rows
-  const handleDeleteRows = async (rowIds: string[]) => {
-    if (!activeSheet) return;
+  // 7. Delete Rows (Supports populated leads, empty placeholder rows, and consecutive row ranges)
+  const handleDeleteRows = async (
+    rowIds: string[],
+    meta?: {
+      startRowIndex?: number;
+      endRowIndex?: number;
+      count?: number;
+      deletedOrders?: number[];
+    }
+  ) => {
+    const currentSheet = activeSheetRef.current || activeSheet;
+    if (!currentSheet) return;
 
     pushUndoSnapshot();
     setSavingStatus("saving");
+
+    // Resolve orders of rows being deleted
+    let deletedOrders: number[] = meta?.deletedOrders ? [...meta.deletedOrders] : [];
+    if (deletedOrders.length === 0) {
+      rowIds.forEach((id) => {
+        const found = currentSheet.rows.find((r) => r.id === id);
+        if (found && typeof found.order === "number") {
+          deletedOrders.push(found.order);
+        }
+      });
+    }
+
+    const realIds = rowIds.filter((id) => id && !id.startsWith("temp_"));
+    const sortedOrders = Array.from(new Set(deletedOrders)).sort((a, b) => b - a);
+
+    // Optimistically update React state immediately with shifted downstream orders
+    setActiveSheet((prev) => {
+      if (!prev || prev.id !== currentSheet.id) return prev;
+
+      let updatedRows = prev.rows.filter(
+        (r) => !realIds.includes(r.id) && !deletedOrders.includes(r.order)
+      );
+
+      for (const orderVal of sortedOrders) {
+        updatedRows = updatedRows.map((r) => {
+          if (typeof r.order === "number" && r.order > orderVal) {
+            return { ...r, order: r.order - 1 };
+          }
+          return r;
+        });
+      }
+
+      return {
+        ...prev,
+        rows: updatedRows,
+      };
+    });
+
     try {
-      const res = await fetch(`/api/sheets/${activeSheet.id}/rows`, {
+      const res = await fetch(`/api/sheets/${currentSheet.id}/rows`, {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rowIds }),
+        body: JSON.stringify({
+          rowIds: realIds,
+          deletedOrders,
+        }),
       });
 
-      if (!res.ok) throw new Error("Failed to delete rows");
-
-      setActiveSheet((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          rows: prev.rows.filter((r) => !rowIds.includes(r.id)),
-        };
-      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || "Failed to delete rows");
+      }
 
       setSavingStatus("saved");
-    } catch (err) {
+    } catch (err: any) {
+      console.error("Delete rows error:", err);
+      showToast(err.message || "Failed to delete row(s)", "error");
+      silentRefreshActiveSheet(currentSheet.id);
       setSavingStatus("error");
     }
   };

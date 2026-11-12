@@ -146,16 +146,16 @@ export async function GET(req: Request, { params }: Params) {
 
     const formattedRows = sheet.rows.map((r) => {
       const data = JSON.parse(r.data || "{}");
-      if (r.followup1Date && !data.col_followup_1_date) {
+      if (r.followup1Date && data.col_followup_1_date === undefined) {
         data.col_followup_1_date = r.followup1Date.toISOString().split("T")[0];
       }
-      if (r.followup2Date && !data.col_followup_2_date) {
+      if (r.followup2Date && data.col_followup_2_date === undefined) {
         data.col_followup_2_date = r.followup2Date.toISOString().split("T")[0];
       }
-      if (r.followup3Date && !data.col_followup_3_date) {
+      if (r.followup3Date && data.col_followup_3_date === undefined) {
         data.col_followup_3_date = r.followup3Date.toISOString().split("T")[0];
       }
-      if (r.followup4Date && !data.col_followup_4_date) {
+      if (r.followup4Date && data.col_followup_4_date === undefined) {
         data.col_followup_4_date = r.followup4Date.toISOString().split("T")[0];
       }
 

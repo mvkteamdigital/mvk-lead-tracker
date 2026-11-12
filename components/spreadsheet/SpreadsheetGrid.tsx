@@ -26,6 +26,7 @@ import {
   Layers,
   Calendar,
   GripVertical,
+  X,
 } from "lucide-react";
 
 interface SpreadsheetGridProps {
@@ -33,7 +34,15 @@ interface SpreadsheetGridProps {
   onUpdateCell: (rowId: string, columnId: string, value: string, order?: number) => Promise<void>;
   onBatchUpdateRows: (rows: Partial<RowData>[]) => Promise<void>;
   onAddRowAt: (index?: number) => Promise<void>;
-  onDeleteRows: (rowIds: string[]) => Promise<void>;
+  onDeleteRows: (
+    rowIds: string[],
+    meta?: {
+      startRowIndex?: number;
+      endRowIndex?: number;
+      count?: number;
+      deletedOrders?: number[];
+    }
+  ) => Promise<void>;
   onUpdateColumns: (columns: ColumnDef[]) => Promise<void>;
   onOpenDropdownModal: (col: ColumnDef) => void;
   activeCell: ActiveCell | null;
@@ -83,6 +92,7 @@ interface GridCellProps {
   onCellContextMenu: (e: React.MouseEvent, rowIdx: number, colIdx: number, col: ColumnDef) => void;
   onDropdownClick: (e: React.MouseEvent, rowIdx: number, colIdx: number, col: ColumnDef) => void;
   onStartEditing: (rowIdx: number, col: ColumnDef) => void;
+  onClearCell?: (rowIdx: number, col: ColumnDef) => void;
 }
 
 const GridCell = ({
@@ -114,6 +124,7 @@ const GridCell = ({
   onCellContextMenu,
   onDropdownClick,
   onStartEditing,
+  onClearCell,
 }: GridCellProps) => {
   const inlineStyle: React.CSSProperties = {
     fontWeight: cellStyle?.bold ? "bold" : "normal",
@@ -192,6 +203,14 @@ const GridCell = ({
               e.preventDefault();
               e.stopPropagation();
               onCancelEdit?.();
+            } else if ((e.key === "Delete" || e.key === "Backspace") && col.type === "date") {
+              e.preventDefault();
+              e.stopPropagation();
+              if (editInputRef?.current) {
+                editInputRef.current.value = "";
+              }
+              onEditValueChange?.("");
+              onCommitEdit?.();
             }
           }}
           className="absolute inset-0 w-full h-full px-2 text-xs bg-white text-gray-900 font-medium border-2 border-blue-600 outline-none z-20 select-text"
@@ -227,10 +246,23 @@ const GridCell = ({
           className="flex items-center justify-between w-full cursor-pointer group/date select-none text-xs"
         >
           {value ? (
-            <span className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-50/80 text-blue-900 font-medium border border-blue-200/80 text-[11px] truncate shadow-2xs">
-              <Calendar className="h-3 w-3 text-blue-600 shrink-0" />
-              <span className="truncate">{value}</span>
-            </span>
+            <div className="flex items-center justify-between w-full">
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-blue-50/80 text-blue-900 font-medium border border-blue-200/80 text-[11px] truncate shadow-2xs">
+                <Calendar className="h-3 w-3 text-blue-600 shrink-0" />
+                <span className="truncate">{value}</span>
+              </span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClearCell?.(rowIdx, col);
+                }}
+                className="opacity-0 group-hover/date:opacity-100 p-0.5 hover:bg-slate-200 rounded text-slate-400 hover:text-rose-600 transition-opacity ml-1"
+                title="Clear date"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
           ) : (
             <span className="text-slate-400 italic text-[11px] flex items-center gap-1 opacity-70 group-hover/date:opacity-100 transition-opacity">
               <Calendar className="h-3 w-3 text-slate-400 shrink-0" />
@@ -296,6 +328,7 @@ interface GridRowProps {
   onCellContextMenu: (e: React.MouseEvent, row: RowData, rowIdx: number, colIdx: number, col: ColumnDef) => void;
   onDropdownClick: (e: React.MouseEvent, row: RowData, rowIdx: number, colIdx: number, col: ColumnDef) => void;
   onStartEditing: (row: RowData, rowIdx: number, col: ColumnDef) => void;
+  onClearCell?: (rowIdx: number, col: ColumnDef) => void;
 }
 
 const GridRow = ({
@@ -323,6 +356,7 @@ const GridRow = ({
   onCellContextMenu,
   onDropdownClick,
   onStartEditing,
+  onClearCell,
 }: GridRowProps) => {
   const rowInSelectionRange =
     selectionRange !== null &&
@@ -403,6 +437,7 @@ const GridRow = ({
             onCellContextMenu={(e, rIdx, cIdx, c) => onCellContextMenu(e, row, rIdx, cIdx, c)}
             onDropdownClick={(e, rIdx, cIdx, c) => onDropdownClick(e, row, rIdx, cIdx, c)}
             onStartEditing={(rIdx, c) => onStartEditing(row, rIdx, c)}
+            onClearCell={onClearCell}
           />
         );
       })}
@@ -512,9 +547,9 @@ export function SpreadsheetGrid({
   const gridContainerRef = useRef<HTMLDivElement>(null);
 
   // Editing state with synchronous ref mirrors to prevent stale closures and race conditions
-  const [editingCell, _setEditingCell] = useState<{ rowId: string; colId: string; rowIdx: number } | null>(null);
-  const editingCellRef = useRef<{ rowId: string; colId: string; rowIdx: number } | null>(null);
-  const setEditingCell = useCallback((cell: { rowId: string; colId: string; rowIdx: number } | null) => {
+  const [editingCell, _setEditingCell] = useState<{ rowId: string; colId: string; rowIdx: number; order?: number } | null>(null);
+  const editingCellRef = useRef<{ rowId: string; colId: string; rowIdx: number; order?: number } | null>(null);
+  const setEditingCell = useCallback((cell: { rowId: string; colId: string; rowIdx: number; order?: number } | null) => {
     editingCellRef.current = cell;
     _setEditingCell(cell);
   }, []);
@@ -561,6 +596,7 @@ export function SpreadsheetGrid({
     rowId: string;
     colId: string;
     rowIdx: number;
+    order?: number;
     top: number;
     left: number;
     options: string[];
@@ -814,7 +850,8 @@ export function SpreadsheetGrid({
 
     // Authoritative value: inspect DOM input element directly if available, fallback to editValueRef
     const valueToSave = editInputRef.current ? editInputRef.current.value : editValueRef.current;
-    const { rowId, colId, rowIdx } = currentEdit;
+    const { rowId, colId, rowIdx, order } = currentEdit;
+    const targetOrder = order !== undefined ? order : rowIdx;
 
     // Immediately clear editing state synchronously
     editingCellRef.current = null;
@@ -822,7 +859,7 @@ export function SpreadsheetGrid({
     isCommittingRef.current = false;
 
     try {
-      await onUpdateCell(rowId, colId, valueToSave, rowIdx);
+      await onUpdateCell(rowId, colId, valueToSave, targetOrder);
     } catch (err) {
       console.error("Error committing cell edit:", err);
     }
@@ -876,7 +913,12 @@ export function SpreadsheetGrid({
     if (col.type === "dropdown") return;
     const initialVal = row.data[col.id] || "";
     setEditValue(initialVal);
-    setEditingCell({ rowId: row.id, colId: col.id, rowIdx });
+    setEditingCell({
+      rowId: row.id,
+      colId: col.id,
+      rowIdx,
+      order: row.order !== undefined ? row.order : rowIdx,
+    });
   }, [setEditValue, setEditingCell]);
 
   // Handle cell double click
@@ -1017,6 +1059,9 @@ export function SpreadsheetGrid({
     if (editingCellRef.current) {
       commitEditRef.current();
     }
+    if (gridContainerRef.current) {
+      gridContainerRef.current.focus();
+    }
     setActiveCell({ rowId: row.id, rowIdx, colId: col.id, colName: col.name });
     setSelectionAnchor({ rowIdx, colIdx });
     setSelectionFocus({ rowIdx, colIdx });
@@ -1027,11 +1072,26 @@ export function SpreadsheetGrid({
       rowId: row.id,
       colId: col.id,
       rowIdx,
+      order: row.order !== undefined ? row.order : rowIdx,
       top: rect.bottom + 2,
       left: rect.left,
       options: col.options && col.options.length > 0 ? col.options : fallbackOptions,
     });
   }, [setActiveCell]);
+
+  // Direct clear cell callback (for date cell X button or context actions)
+  const handleClearCell = useCallback(
+    async (rowIdx: number, col: ColumnDef) => {
+      const targetRow =
+        (isFiltered && rowIdx >= 0 && rowIdx < filteredRows.length
+          ? filteredRows[rowIdx]
+          : null) || getRowAtIndex(rowIdx);
+      const targetRowId = targetRow?.id || `temp_${rowIdx}`;
+      const targetOrder = targetRow?.order !== undefined ? targetRow.order : rowIdx;
+      await onUpdateCell(targetRowId, col.id, "", targetOrder);
+    },
+    [isFiltered, filteredRows, getRowAtIndex, onUpdateCell]
+  );
 
   // Row context menu
   const handleRowContextMenu = useCallback(
@@ -1070,9 +1130,13 @@ export function SpreadsheetGrid({
   // Select dropdown option
   const handleSelectDropdownOption = async (option: string) => {
     if (!openDropdown) return;
-    const { rowId, colId, rowIdx } = openDropdown;
+    const { rowId, colId, rowIdx, order } = openDropdown;
     setOpenDropdown(null);
-    await onUpdateCell(rowId, colId, option, rowIdx);
+    const targetOrder = order !== undefined ? order : rowIdx;
+    await onUpdateCell(rowId, colId, option, targetOrder);
+    if (gridContainerRef.current) {
+      gridContainerRef.current.focus();
+    }
   };
 
   // Column resize logic
@@ -1181,6 +1245,50 @@ export function SpreadsheetGrid({
       if ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Y")) {
         e.preventDefault();
         if (onRedo) onRedo();
+        return;
+      }
+
+      // 2b. Delete Row shortcut (Ctrl + - or Cmd + -) like Google Sheets
+      if ((e.ctrlKey || e.metaKey) && (e.key === "-" || e.key === "_")) {
+        e.preventDefault();
+        if (!activeCell) return;
+        const startRowIndex = selectionRange ? selectionRange.startRow : activeCell.rowIdx;
+        const endRowIndex = selectionRange ? selectionRange.endRow : activeCell.rowIdx;
+        const count = endRowIndex - startRowIndex + 1;
+
+        const rowIdsToDelete: string[] = [];
+        const ordersToDelete: number[] = [];
+
+        for (let r = startRowIndex; r <= endRowIndex; r++) {
+          const row = isFiltered
+            ? (r >= 0 && r < filteredRows.length ? filteredRows[r] : null)
+            : getRowAtIndex(r);
+
+          const rowId = row?.id || `temp_${r}`;
+          rowIdsToDelete.push(rowId);
+
+          const ord = row?.order !== undefined ? row.order : r;
+          ordersToDelete.push(ord);
+        }
+
+        await onDeleteRows(rowIdsToDelete, {
+          startRowIndex,
+          endRowIndex,
+          count,
+          deletedOrders: ordersToDelete,
+        });
+
+        // Maintain selection at startRowIndex
+        const targetRowAfter = isFiltered
+          ? (startRowIndex < filteredRows.length ? filteredRows[startRowIndex] : null)
+          : getRowAtIndex(startRowIndex);
+        setActiveCell({
+          ...activeCell,
+          rowIdx: startRowIndex,
+          rowId: targetRowAfter?.id || `temp_${startRowIndex}`,
+        });
+        setSelectionAnchor({ rowIdx: startRowIndex, colIdx: 0 });
+        setSelectionFocus({ rowIdx: startRowIndex, colIdx: sheet.columns.length - 1 });
         return;
       }
 
@@ -1378,21 +1486,29 @@ export function SpreadsheetGrid({
         if (isMultiCell && selectionRange) {
           const rowsToUpsert: Partial<RowData>[] = [];
           for (let r = selectionRange.startRow; r <= selectionRange.endRow; r++) {
-            const existingRow = getRowAtIndex(r);
+            const existingRow =
+              (isFiltered && r >= 0 && r < filteredRows.length ? filteredRows[r] : null) ||
+              getRowAtIndex(r);
             const rowData = { ...existingRow.data };
             let changed = false;
             for (let c = selectionRange.startCol; c <= selectionRange.endCol; c++) {
               const col = sheet.columns[c];
-              if (col && rowData[col.id]) {
+              if (
+                col &&
+                rowData[col.id] !== undefined &&
+                rowData[col.id] !== null &&
+                rowData[col.id] !== ""
+              ) {
                 rowData[col.id] = "";
                 changed = true;
               }
             }
             if (changed) {
+              const targetOrder = existingRow.order !== undefined ? existingRow.order : r;
               rowsToUpsert.push({
                 id: existingRow.id,
                 sheetId: sheet.id,
-                order: r,
+                order: targetOrder,
                 data: rowData,
               });
             }
@@ -1401,9 +1517,24 @@ export function SpreadsheetGrid({
             await onBatchUpdateRows(rowsToUpsert);
           }
         } else {
-          const activeRow = getRowAtIndex(activeCell.rowIdx);
-          if (activeRow.data[activeCell.colId]) {
-            await onUpdateCell(activeRow.id, activeCell.colId, "", activeCell.rowIdx);
+          const targetRow =
+            (activeCell.rowId && !activeCell.rowId.startsWith("temp_")
+              ? sheet.rows.find((r) => r.id === activeCell.rowId)
+              : null) ||
+            (isFiltered && activeCell.rowIdx >= 0 && activeCell.rowIdx < filteredRows.length
+              ? filteredRows[activeCell.rowIdx]
+              : null) ||
+            sheet.rows.find((r) => (r.order !== undefined ? r.order : -1) === activeCell.rowIdx) ||
+            getRowAtIndex(activeCell.rowIdx);
+
+          const targetRowId = targetRow?.id || activeCell.rowId || `temp_${activeCell.rowIdx}`;
+          const targetOrder = targetRow?.order !== undefined ? targetRow.order : activeCell.rowIdx;
+
+          const currentValue = targetRow?.data ? targetRow.data[activeCell.colId] : undefined;
+          const hasValue = currentValue !== undefined && currentValue !== null && currentValue !== "";
+
+          if (hasValue || !targetRowId.startsWith("temp_")) {
+            await onUpdateCell(targetRowId, activeCell.colId, "", targetOrder);
           }
         }
         return;
@@ -1963,6 +2094,7 @@ export function SpreadsheetGrid({
                       onCellContextMenu={handleContextMenu}
                       onDropdownClick={handleDropdownClick}
                       onStartEditing={startEditing}
+                      onClearCell={handleClearCell}
                     />
                   );
                 })
@@ -2004,6 +2136,7 @@ export function SpreadsheetGrid({
                       onCellContextMenu={handleContextMenu}
                       onDropdownClick={handleDropdownClick}
                       onStartEditing={startEditing}
+                      onClearCell={handleClearCell}
                     />
                   );
                 })}
@@ -2048,13 +2181,38 @@ export function SpreadsheetGrid({
       {/* Dropdown Options Popover Menu */}
       {openDropdown && (
         <div
+          tabIndex={0}
           style={{ top: `${openDropdown.top}px`, left: `${openDropdown.left}px` }}
-          className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 py-1.5 w-64 max-h-80 overflow-y-auto animate-in fade-in zoom-in-95"
+          className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 py-1.5 w-64 max-h-80 overflow-y-auto animate-in fade-in zoom-in-95 outline-none"
           onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setOpenDropdown(null);
+              gridContainerRef.current?.focus();
+            } else if (e.key === "Delete" || e.key === "Backspace") {
+              e.preventDefault();
+              handleSelectDropdownOption("");
+            }
+          }}
         >
-          <div className="px-3 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100">
-            {openDropdown.colId === "col_lead_source" ? "Select Lead Source" : "Select Follow-Up Status"}
+          <div className="px-3 py-1 text-[10px] font-semibold text-slate-400 uppercase tracking-wider border-b border-slate-100 flex items-center justify-between">
+            <span>{openDropdown.colId === "col_lead_source" ? "Select Lead Source" : "Select Follow-Up Status"}</span>
+            <button
+              type="button"
+              onClick={() => handleSelectDropdownOption("")}
+              className="text-[10px] text-rose-500 hover:text-rose-700 font-semibold px-1 py-0.5 rounded hover:bg-rose-50 transition-colors"
+            >
+              Clear
+            </button>
           </div>
+          <button
+            type="button"
+            onClick={() => handleSelectDropdownOption("")}
+            className="w-full px-3 py-2 text-left text-xs hover:bg-rose-50 flex items-center gap-2 transition-colors font-medium text-rose-600 border-b border-slate-100"
+          >
+            <span className="h-2.5 w-2.5 rounded-full border border-dashed border-rose-400 flex items-center justify-center shrink-0" />
+            <span>Clear Selection (None)</span>
+          </button>
           {openDropdown.options.map((opt) => {
             const colors =
               openDropdown.colId === "col_lead_source"
@@ -2063,6 +2221,7 @@ export function SpreadsheetGrid({
             return (
               <button
                 key={opt}
+                type="button"
                 onClick={() => handleSelectDropdownOption(opt)}
                 className="w-full px-3 py-2 text-left text-xs hover:bg-slate-50 flex items-center gap-2 transition-colors font-medium text-slate-700"
               >
@@ -2185,13 +2344,68 @@ export function SpreadsheetGrid({
           <div className="border-t border-slate-100 my-1" />
           <button
             onClick={async () => {
-              await onDeleteRows([contextMenu.rowId]);
+              const isRowInSelection =
+                selectionRange !== null &&
+                contextMenu.rowIdx >= selectionRange.startRow &&
+                contextMenu.rowIdx <= selectionRange.endRow;
+
+              const startRowIndex = isRowInSelection ? selectionRange.startRow : contextMenu.rowIdx;
+              const endRowIndex = isRowInSelection ? selectionRange.endRow : contextMenu.rowIdx;
+              const count = endRowIndex - startRowIndex + 1;
+
+              const rowIdsToDelete: string[] = [];
+              const ordersToDelete: number[] = [];
+
+              for (let r = startRowIndex; r <= endRowIndex; r++) {
+                const row = isFiltered
+                  ? (r >= 0 && r < filteredRows.length ? filteredRows[r] : null)
+                  : getRowAtIndex(r);
+
+                const rowId = row?.id || `temp_${r}`;
+                rowIdsToDelete.push(rowId);
+
+                const ord = row?.order !== undefined ? row.order : r;
+                ordersToDelete.push(ord);
+              }
+
               setContextMenu(null);
+
+              await onDeleteRows(rowIdsToDelete, {
+                startRowIndex,
+                endRowIndex,
+                count,
+                deletedOrders: ordersToDelete,
+              });
+
+              // Maintain selection at startRowIndex
+              if (activeCell) {
+                const targetRowAfter = isFiltered
+                  ? (startRowIndex < filteredRows.length ? filteredRows[startRowIndex] : null)
+                  : getRowAtIndex(startRowIndex);
+                setActiveCell({
+                  ...activeCell,
+                  rowIdx: startRowIndex,
+                  rowId: targetRowAfter?.id || `temp_${startRowIndex}`,
+                });
+                setSelectionAnchor({ rowIdx: startRowIndex, colIdx: 0 });
+                setSelectionFocus({ rowIdx: startRowIndex, colIdx: sheet.columns.length - 1 });
+              }
             }}
             className="w-full px-3 py-1.5 text-left hover:bg-rose-50 text-rose-600 flex items-center gap-2 font-medium"
           >
             <Trash2 className="h-3.5 w-3.5" />
-            <span>Delete Row</span>
+            <span>
+              {(() => {
+                const isRowInSelection =
+                  selectionRange !== null &&
+                  contextMenu.rowIdx >= selectionRange.startRow &&
+                  contextMenu.rowIdx <= selectionRange.endRow;
+                const count = isRowInSelection
+                  ? selectionRange.endRow - selectionRange.startRow + 1
+                  : 1;
+                return count > 1 ? `Delete ${count} Rows` : "Delete Row";
+              })()}
+            </span>
           </button>
         </div>
       )}

@@ -550,28 +550,76 @@ export async function DELETE(req: Request, { params }: Params) {
   }
 
   try {
-    const { rowIds } = await req.json();
+    const body = await req.json();
+    const rowIds: string[] = Array.isArray(body)
+      ? body
+      : Array.isArray(body.rowIds)
+      ? body.rowIds
+      : [];
+    const incomingOrders: number[] = Array.isArray(body.deletedOrders)
+      ? body.deletedOrders
+      : [];
 
-    if (!Array.isArray(rowIds) || rowIds.length === 0) {
-      return NextResponse.json(
-        { error: "rowIds array is required" },
-        { status: 400 }
-      );
-    }
+    const realIds = rowIds.filter((id) => typeof id === "string" && !id.startsWith("temp_"));
+    const deletedOrders: number[] = [...incomingOrders];
 
-    // Filter out any temp IDs
-    const realIds = rowIds.filter((id) => !id.startsWith("temp_"));
+    await prisma.$transaction(async (tx) => {
+      // 1. If deletedOrders was not provided, look up orders of realIds before deletion
+      if (deletedOrders.length === 0 && realIds.length > 0) {
+        const existingRows = await tx.row.findMany({
+          where: { id: { in: realIds }, sheetId },
+          select: { order: true },
+        });
+        existingRows.forEach((r) => {
+          if (typeof r.order === "number") {
+            deletedOrders.push(r.order);
+          }
+        });
+      }
 
-    if (realIds.length > 0) {
-      await prisma.row.deleteMany({
-        where: {
-          id: { in: realIds },
-          sheetId,
-        },
-      });
-    }
+      // 2. Delete rows by real ID
+      if (realIds.length > 0) {
+        await tx.row.deleteMany({
+          where: {
+            id: { in: realIds },
+            sheetId,
+          },
+        });
+      }
 
-    return NextResponse.json({ success: true, deletedCount: realIds.length });
+      // 3. Delete any row records that were persisted at deletedOrders
+      if (deletedOrders.length > 0) {
+        await tx.row.deleteMany({
+          where: {
+            sheetId,
+            order: { in: deletedOrders },
+          },
+        });
+      }
+
+      // 4. Shift downstream rows upward in the database (decrement order)
+      if (deletedOrders.length > 0) {
+        const sortedOrders = Array.from(new Set(deletedOrders)).sort((a, b) => b - a);
+        for (const orderVal of sortedOrders) {
+          await tx.row.updateMany({
+            where: {
+              sheetId,
+              order: { gt: orderVal },
+            },
+            data: {
+              order: { decrement: 1 },
+            },
+          });
+        }
+      }
+    });
+
+    return NextResponse.json({
+      success: true,
+      deletedCount: realIds.length + deletedOrders.length,
+      realDeletedCount: realIds.length,
+      shiftedCount: deletedOrders.length,
+    });
   } catch (error: any) {
     console.error("Error deleting rows:", error);
     return NextResponse.json(

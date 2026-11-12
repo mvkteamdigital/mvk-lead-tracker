@@ -2177,6 +2177,7 @@ class MockGridAppHarness {
 
       // Backend atomic persistence
       let dbTarget = this.dbRows.find((r) => r.id === rowId || (order !== undefined && r.order === order));
+      const localTarget = this.sheet.rows.find((r) => r.id === rowId || (order !== undefined && r.order === order));
       if (dbTarget) {
         dbTarget.data = { ...dbTarget.data, [columnId]: sanitizedValue };
       } else {
@@ -2185,7 +2186,7 @@ class MockGridAppHarness {
           id: newDbId,
           sheetId: this.sheet.id,
           order,
-          data: { [columnId]: sanitizedValue },
+          data: { ...(localTarget ? localTarget.data : {}), [columnId]: sanitizedValue },
           styles: {},
           createdAt: new Date().toISOString(),
         };
@@ -2230,6 +2231,125 @@ class MockGridAppHarness {
     });
     this.sheet.rows = merged;
     return true;
+  }
+
+  // Handle Delete or Backspace key press on active cell or selection range (Section 12)
+  async pressDeleteOrBackspace(key = "Delete") {
+    if (this.isMultiCell && this.selectionRange) {
+      const rowsToUpsert = [];
+      for (let r = this.selectionRange.startRow; r <= this.selectionRange.endRow; r++) {
+        const existingRow = this.sheet.rows[r] || { id: `temp_${r}`, order: r, data: {} };
+        const rowData = { ...existingRow.data };
+        let changed = false;
+        for (let c = this.selectionRange.startCol; c <= this.selectionRange.endCol; c++) {
+          const col = this.columns[c];
+          if (col && rowData[col.id] !== undefined && rowData[col.id] !== null && rowData[col.id] !== "") {
+            rowData[col.id] = "";
+            changed = true;
+          }
+        }
+        if (changed) {
+          const targetOrder = existingRow.order !== undefined ? existingRow.order : r;
+          rowsToUpsert.push({
+            id: existingRow.id,
+            sheetId: this.sheet.id,
+            order: targetOrder,
+            data: rowData,
+          });
+        }
+      }
+      if (rowsToUpsert.length > 0) {
+        await this.handleBatchUpdateRows(rowsToUpsert);
+      }
+      return;
+    }
+
+    if (!this.activeCell) return;
+    const targetRow =
+      (this.activeCell.rowId && !this.activeCell.rowId.startsWith("temp_")
+        ? this.sheet.rows.find((r) => r.id === this.activeCell.rowId)
+        : null) ||
+      this.sheet.rows.find((r) => (r.order !== undefined ? r.order : -1) === this.activeCell.rowIdx) ||
+      this.sheet.rows[this.activeCell.rowIdx];
+
+    const targetRowId = targetRow?.id || this.activeCell.rowId || `temp_${this.activeCell.rowIdx}`;
+    const targetOrder = targetRow?.order !== undefined ? targetRow.order : this.activeCell.rowIdx;
+
+    const currentValue = targetRow?.data ? targetRow.data[this.activeCell.colId] : undefined;
+    const hasValue = currentValue !== undefined && currentValue !== null && currentValue !== "";
+
+    if (hasValue || !targetRowId.startsWith("temp_")) {
+      await this.handleUpdateCell(targetRowId, this.activeCell.colId, "", targetOrder);
+    }
+  }
+
+  async handleBatchUpdateRows(rows) {
+    this.activeSavesCountRef++;
+    this.isSavingRef = true;
+    for (const r of rows) {
+      let target = this.sheet.rows.find((row) => (r.id && row.id === r.id) || (r.order !== undefined && row.order === r.order));
+      if (target) {
+        target.data = { ...target.data, ...r.data };
+      }
+      let dbTarget = this.dbRows.find((row) => (r.id && row.id === r.id) || (r.order !== undefined && row.order === r.order));
+      if (dbTarget) {
+        dbTarget.data = { ...dbTarget.data, ...r.data };
+      }
+    }
+    this.activeSavesCountRef = Math.max(0, this.activeSavesCountRef - 1);
+    this.isSavingRef = this.activeSavesCountRef > 0;
+  }
+
+  // Row deletion method for Section 13
+  async handleDeleteRows(rowIds, meta) {
+    this.activeSavesCountRef++;
+    this.isSavingRef = true;
+    this.savingStatus = "saving";
+
+    let deletedOrders = meta?.deletedOrders ? [...meta.deletedOrders] : [];
+    if (deletedOrders.length === 0) {
+      rowIds.forEach((id) => {
+        const found = this.sheet.rows.find((r) => r.id === id);
+        if (found && typeof found.order === "number") {
+          deletedOrders.push(found.order);
+        }
+      });
+    }
+
+    const realIds = rowIds.filter((id) => id && !id.startsWith("temp_"));
+    const sortedOrders = Array.from(new Set(deletedOrders)).sort((a, b) => b - a);
+
+    // Optimistically update local sheet.rows with shifted downstream orders
+    let updatedRows = this.sheet.rows.filter(
+      (r) => !realIds.includes(r.id) && !deletedOrders.includes(r.order)
+    );
+    for (const orderVal of sortedOrders) {
+      updatedRows = updatedRows.map((r) => {
+        if (typeof r.order === "number" && r.order > orderVal) {
+          return { ...r, order: r.order - 1 };
+        }
+        return r;
+      });
+    }
+    this.sheet.rows = updatedRows;
+
+    // Backend database atomic persistence
+    let updatedDbRows = this.dbRows.filter(
+      (r) => !realIds.includes(r.id) && !deletedOrders.includes(r.order)
+    );
+    for (const orderVal of sortedOrders) {
+      updatedDbRows = updatedDbRows.map((r) => {
+        if (typeof r.order === "number" && r.order > orderVal) {
+          return { ...r, order: r.order - 1 };
+        }
+        return r;
+      });
+    }
+    this.dbRows = updatedDbRows;
+
+    this.activeSavesCountRef = Math.max(0, this.activeSavesCountRef - 1);
+    this.isSavingRef = this.activeSavesCountRef > 0;
+    this.savingStatus = "saved";
   }
 }
 
@@ -2524,6 +2644,439 @@ it("Scenario 18: Formula bar edit -> value saved to active cell, matches in-cell
   assert.strictEqual(harness.dbRows[0].data.col_name, "Formula Bar Edited");
   assert.strictEqual(harness.sheet.rows[0].data.col_name, "Formula Bar Edited");
   assert.strictEqual(harness.savingStatus, "saved");
+});
+
+// ==========================================
+// SECTION 12: CELL CLEARING & DELETE FUNCTIONALITY
+// ==========================================
+console.log("\n--- SECTION 12: CELL CLEARING & DELETE FUNCTIONALITY ---");
+
+it("Scenario 1: Single cell clear on text field (Name) via Delete key -> value becomes empty string, saved to DB on first attempt", async () => {
+  const harness = new MockGridAppHarness([{ id: "clr_text_1", order: 0, data: { col_name: "Original Name" } }]);
+  harness.activeCell = { rowId: "clr_text_1", rowIdx: 0, colId: "col_name", colName: "Name" };
+
+  await harness.pressDeleteOrBackspace("Delete");
+
+  assert.strictEqual(harness.sheet.rows[0].data.col_name, "");
+  assert.strictEqual(harness.dbRows[0].data.col_name, "");
+  assert.strictEqual(harness.savingStatus, "saved");
+});
+
+it("Scenario 2: Single cell clear on phone number via Backspace key -> value becomes empty string, saved to DB on first attempt", async () => {
+  const harness = new MockGridAppHarness([{ id: "clr_phone_1", order: 0, data: { col_name: "Test", col_number: "9876543210" } }]);
+  harness.activeCell = { rowId: "clr_phone_1", rowIdx: 0, colId: "col_number", colName: "Number" };
+
+  await harness.pressDeleteOrBackspace("Backspace");
+
+  assert.strictEqual(harness.sheet.rows[0].data.col_number, "");
+  assert.strictEqual(harness.dbRows[0].data.col_number, "");
+  assert.strictEqual(harness.savingStatus, "saved");
+});
+
+it("Scenario 3: Single cell clear on dropdown field (Lead Source) via Delete key -> selection cleared, saved to DB", async () => {
+  const harness = new MockGridAppHarness([{ id: "clr_src_1", order: 0, data: { col_name: "Lead", col_lead_source: "Instagram" } }]);
+  harness.activeCell = { rowId: "clr_src_1", rowIdx: 0, colId: "col_lead_source", colName: "Lead Source" };
+
+  await harness.pressDeleteOrBackspace("Delete");
+
+  assert.strictEqual(harness.sheet.rows[0].data.col_lead_source, "");
+  assert.strictEqual(harness.dbRows[0].data.col_lead_source, "");
+  assert.strictEqual(harness.savingStatus, "saved");
+});
+
+it("Scenario 4: Single cell clear on follow-up status dropdown via Delete key -> selection cleared, status becomes Unattended, saved to DB", async () => {
+  const harness = new MockGridAppHarness([{ id: "clr_stat_1", order: 0, data: { col_name: "Lead", col_followup_1: "Site Visit Scheduled" } }]);
+  harness.activeCell = { rowId: "clr_stat_1", rowIdx: 0, colId: "col_followup_1", colName: "1st Follow Up" };
+
+  await harness.pressDeleteOrBackspace("Delete");
+
+  assert.strictEqual(harness.sheet.rows[0].data.col_followup_1, "");
+  assert.strictEqual(harness.dbRows[0].data.col_followup_1, "");
+  assert.strictEqual(isUnattendedLead(harness.dbRows[0].data, harness.columns), true);
+  assert.strictEqual(harness.savingStatus, "saved");
+});
+
+it("Scenario 5: Single cell clear on follow-up date via Delete key / Backspace in date cell -> date cleared, saved to DB, does not resurrect on refresh", async () => {
+  const harness = new MockGridAppHarness([{ id: "clr_date_1", order: 0, data: { col_name: "Lead", col_followup_date: "2026-11-15" } }]);
+  harness.activeCell = { rowId: "clr_date_1", rowIdx: 0, colId: "col_followup_date", colName: "Follow Up Date" };
+
+  await harness.pressDeleteOrBackspace("Delete");
+
+  assert.strictEqual(harness.sheet.rows[0].data.col_followup_date, "");
+  assert.strictEqual(harness.dbRows[0].data.col_followup_date, "");
+
+  // Simulate refresh: ensure cleared date does not resurrect
+  harness.triggerBackgroundSync();
+  assert.strictEqual(harness.sheet.rows[0].data.col_followup_date, "");
+});
+
+it("Scenario 6: Clear cell value via dropdown menu 'Clear Selection' option -> value cleared, saved to DB", async () => {
+  const harness = new MockGridAppHarness([{ id: "clr_menu_1", order: 0, data: { col_name: "Lead", col_lead_source: "Facebook Ads" } }]);
+  
+  // Dropdown menu "Clear Selection" invokes handleUpdateCell with ""
+  await harness.handleUpdateCell("clr_menu_1", "col_lead_source", "", 0);
+
+  assert.strictEqual(harness.sheet.rows[0].data.col_lead_source, "");
+  assert.strictEqual(harness.dbRows[0].data.col_lead_source, "");
+  assert.strictEqual(harness.savingStatus, "saved");
+});
+
+it("Scenario 7: Clear cell value via date picker clear action -> date cleared, saved to DB", async () => {
+  const harness = new MockGridAppHarness([{ id: "clr_picker_1", order: 0, data: { col_name: "Lead", col_followup_date: "2026-12-01" } }]);
+  
+  // Date picker clear button invokes onClearCell / handleUpdateCell with ""
+  await harness.handleUpdateCell("clr_picker_1", "col_followup_date", "", 0);
+
+  assert.strictEqual(harness.sheet.rows[0].data.col_followup_date, "");
+  assert.strictEqual(harness.dbRows[0].data.col_followup_date, "");
+  assert.strictEqual(harness.savingStatus, "saved");
+});
+
+it("Scenario 8: Multi-cell selection: select a 3x3 range and press Delete -> all 9 cells cleared in frontend, all cleared in DB via batch update, row positions preserved", async () => {
+  const initialRows = [
+    { id: "mc_1", order: 0, data: { col_project_name: "PR1", col_plot_size: "1500", col_budget: "50L" } },
+    { id: "mc_2", order: 1, data: { col_project_name: "PR2", col_plot_size: "2000", col_budget: "60L" } },
+    { id: "mc_3", order: 2, data: { col_project_name: "PR3", col_plot_size: "2500", col_budget: "70L" } },
+  ];
+  const harness = new MockGridAppHarness(initialRows);
+  harness.isMultiCell = true;
+  // columns: 0 = col_project_name, 1 = col_plot_size, 2 = col_budget
+  harness.selectionRange = { startRow: 0, endRow: 2, startCol: 0, endCol: 2 };
+
+  await harness.pressDeleteOrBackspace("Delete");
+
+  for (let r = 0; r < 3; r++) {
+    assert.strictEqual(harness.sheet.rows[r].data.col_project_name, "");
+    assert.strictEqual(harness.sheet.rows[r].data.col_plot_size, "");
+    assert.strictEqual(harness.sheet.rows[r].data.col_budget, "");
+    assert.strictEqual(harness.dbRows[r].data.col_project_name, "");
+    assert.strictEqual(harness.dbRows[r].data.col_plot_size, "");
+    assert.strictEqual(harness.dbRows[r].data.col_budget, "");
+    assert.strictEqual(harness.sheet.rows[r].order, r, `Row ${r} position preserved`);
+    assert.strictEqual(harness.dbRows[r].order, r, `DB row ${r} position preserved`);
+  }
+});
+
+it("Scenario 9: Clear cell in a filtered view -> correct lead updated by ID/order, other leads unaffected, filter state preserved", async () => {
+  const harness = new MockGridAppHarness([
+    { id: "flt_lead_1", order: 0, data: { col_name: "Lead A", col_followup_1: "Site Visit Scheduled" } },
+    { id: "flt_lead_2", order: 50, data: { col_name: "Lead B", col_followup_1: "Site Visit Scheduled" } },
+    { id: "flt_lead_3", order: 100, data: { col_name: "Lead C", col_followup_1: "Call Done" } },
+  ]);
+
+  // Lead B is at rowIdx 1 in filtered view, but order 50 in sheet
+  harness.activeCell = { rowId: "flt_lead_2", rowIdx: 1, colId: "col_name", colName: "Name" };
+
+  await harness.pressDeleteOrBackspace("Delete");
+
+  assert.strictEqual(harness.dbRows[1].data.col_name, "", "Target lead B cleared");
+  assert.strictEqual(harness.dbRows[0].data.col_name, "Lead A", "Lead A unaffected");
+  assert.strictEqual(harness.dbRows[2].data.col_name, "Lead C", "Lead C unaffected");
+  assert.strictEqual(harness.dbRows[1].order, 50, "Lead B preserved sparse order 50");
+});
+
+it("Scenario 10: Clear cell and immediately navigate away via Enter, Tab, Arrow keys -> cleared value stays empty, no revert", async () => {
+  const harness = new MockGridAppHarness([{ id: "nav_lead", order: 0, data: { col_name: "Will Clear" } }]);
+  harness.activeCell = { rowId: "nav_lead", rowIdx: 0, colId: "col_name", colName: "Name" };
+
+  await harness.pressDeleteOrBackspace("Delete");
+  // Immediately navigate down
+  harness.activeCell = { rowId: undefined, rowIdx: 1, colId: "col_name", colName: "Name" };
+
+  assert.strictEqual(harness.dbRows[0].data.col_name, "");
+  assert.strictEqual(harness.sheet.rows[0].data.col_name, "");
+});
+
+it("Scenario 11: Clear cell on newly pasted lead -> cleared value saved, lead remains in its pasted row position", async () => {
+  const harness = new MockGridAppHarness([]);
+  const pastedRow = { id: "temp_paste_44", sheetId: harness.sheet.id, order: 44, data: { col_name: "Pasted 44", col_number: "9999988888" } };
+  harness.sheet.rows.push(pastedRow);
+  harness.activeCell = { rowId: "temp_paste_44", rowIdx: 44, colId: "col_name", colName: "Name" };
+
+  await harness.pressDeleteOrBackspace("Delete");
+
+  assert.strictEqual(harness.dbRows[0].data.col_name, "");
+  assert.strictEqual(harness.dbRows[0].data.col_number, "9999988888");
+  assert.strictEqual(harness.dbRows[0].order, 44, "Pasted row position 44 maintained");
+});
+
+it("Scenario 12: Clear cell, refresh page -> cell remains empty in DB and frontend, no resurrection of old values", async () => {
+  const harness = new MockGridAppHarness([{ id: "refresh_lead", order: 0, data: { col_name: "Old Value", col_followup_1: "Token Received" } }]);
+  harness.activeCell = { rowId: "refresh_lead", rowIdx: 0, colId: "col_followup_1", colName: "1st Follow Up" };
+
+  await harness.pressDeleteOrBackspace("Delete");
+  assert.strictEqual(harness.dbRows[0].data.col_followup_1, "");
+
+  // Simulate full page refresh / background sync
+  harness.triggerBackgroundSync();
+  assert.strictEqual(harness.sheet.rows[0].data.col_followup_1, "");
+  assert.strictEqual(harness.dbRows[0].data.col_followup_1, "");
+});
+
+it("Scenario 13: Clear cell does NOT delete the lead row -> row ID, sheet ID, member ownership, Added Date, other cell values, and row order all preserved", async () => {
+  const createdDate = "2026-11-01T10:00:00.000Z";
+  const harness = new MockGridAppHarness([
+    {
+      id: "preserve_row_1",
+      sheetId: "sheet_satya",
+      order: 7,
+      createdAt: createdDate,
+      data: {
+        col_name: "Important Client",
+        col_number: "9876543210",
+        col_project_name: "Green Acres",
+        col_budget: "1 Crore",
+      },
+    },
+  ]);
+
+  harness.activeCell = { rowId: "preserve_row_1", rowIdx: 7, colId: "col_budget", colName: "Client Budget" };
+  await harness.pressDeleteOrBackspace("Delete");
+
+  assert.strictEqual(harness.dbRows.length, 1, "Lead row was NOT deleted from DB");
+  assert.strictEqual(harness.sheet.rows.length, 1, "Lead row was NOT deleted from sheet");
+  assert.strictEqual(harness.dbRows[0].id, "preserve_row_1", "Row ID preserved");
+  assert.strictEqual(harness.dbRows[0].sheetId, "sheet_satya", "Sheet ID preserved");
+  assert.strictEqual(harness.dbRows[0].order, 7, "Row order 7 preserved");
+  assert.strictEqual(harness.dbRows[0].createdAt, createdDate, "Added Date preserved");
+  assert.strictEqual(harness.dbRows[0].data.col_budget, "", "Target cell cleared");
+  assert.strictEqual(harness.dbRows[0].data.col_name, "Important Client", "Other cell Name preserved");
+  assert.strictEqual(harness.dbRows[0].data.col_number, "9876543210", "Other cell Number preserved");
+  assert.strictEqual(harness.dbRows[0].data.col_project_name, "Green Acres", "Other cell Project preserved");
+});
+
+// ==========================================
+// SECTION 13: ROW DELETION SUPPORT (POPULATED & EMPTY ROWS)
+// ==========================================
+console.log("\n--- SECTION 13: ROW DELETION SUPPORT (POPULATED & EMPTY ROWS) ---");
+
+it("Scenario 1: Delete a populated row -> row removed from DB, downstream rows shift upward, sheet order updated", async () => {
+  const harness = new MockGridAppHarness([
+    { id: "del_pop_1", order: 0, data: { col_name: "Lead 1" } },
+    { id: "del_pop_2", order: 1, data: { col_name: "Lead 2" } },
+    { id: "del_pop_3", order: 2, data: { col_name: "Lead 3" } },
+  ]);
+
+  // Delete Lead 2 at order 1
+  await harness.handleDeleteRows(["del_pop_2"], { startRowIndex: 1, endRowIndex: 1, count: 1, deletedOrders: [1] });
+
+  assert.strictEqual(harness.dbRows.length, 2, "DB has 2 rows left");
+  assert.strictEqual(harness.sheet.rows.length, 2, "Sheet has 2 rows left");
+  assert.strictEqual(harness.dbRows[0].id, "del_pop_1");
+  assert.strictEqual(harness.dbRows[0].order, 0, "Lead 1 remained at order 0");
+  assert.strictEqual(harness.dbRows[1].id, "del_pop_3");
+  assert.strictEqual(harness.dbRows[1].order, 1, "Lead 3 shifted from order 2 to order 1");
+  assert.strictEqual(harness.dbRows[1].data.col_name, "Lead 3", "Lead 3 data intact");
+});
+
+it("Scenario 2: Delete one empty row between two populated rows (Scenario A) -> Row 43 retained, Row 44 removed, Row 45 shifts to 44", async () => {
+  // Row 43 (order 42): populated
+  // Row 44 (order 43): completely empty (virtual or temp)
+  // Row 45 (order 44): populated Lead 45
+  const harness = new MockGridAppHarness([
+    { id: "lead_43", order: 42, data: { col_name: "Lead 43", col_number: "9876543210" } },
+    { id: "lead_45", order: 44, data: { col_name: "Lead 45", col_number: "9123456789" } },
+  ]);
+
+  // User selects Row 44 (order 43) and chooses Delete Row
+  await harness.handleDeleteRows(["temp_43"], { startRowIndex: 43, endRowIndex: 43, count: 1, deletedOrders: [43] });
+
+  assert.strictEqual(harness.dbRows.length, 2, "Both populated leads retained in DB");
+  assert.strictEqual(harness.dbRows[0].id, "lead_43");
+  assert.strictEqual(harness.dbRows[0].order, 42, "Row 43 remained unchanged");
+  assert.strictEqual(harness.dbRows[1].id, "lead_45");
+  assert.strictEqual(harness.dbRows[1].order, 43, "Row 45 moved into vacated Row 44 (order 43)!");
+  assert.strictEqual(harness.dbRows[1].data.col_name, "Lead 45", "Lead 45 info 100% preserved");
+  assert.strictEqual(harness.dbRows[1].data.col_number, "9123456789", "Lead 45 phone 100% preserved");
+});
+
+it("Scenario 3: Delete an empty row immediately after the last populated row -> last populated row untouched, empty row removed", async () => {
+  const harness = new MockGridAppHarness([
+    { id: "lead_last", order: 10, data: { col_name: "Last Lead" } },
+  ]);
+
+  // Delete empty Row at order 11
+  await harness.handleDeleteRows(["temp_11"], { startRowIndex: 11, endRowIndex: 11, count: 1, deletedOrders: [11] });
+
+  assert.strictEqual(harness.dbRows.length, 1);
+  assert.strictEqual(harness.dbRows[0].id, "lead_last");
+  assert.strictEqual(harness.dbRows[0].order, 10, "Populated lead order untouched");
+});
+
+it("Scenario 4: Delete an empty row at the beginning of a sheet -> Row 1 (empty) removed, Row 2 (Lead 1) shifts to Row 1 (order 0)", async () => {
+  // Row 1 (order 0): empty
+  // Row 2 (order 1): Lead 1
+  const harness = new MockGridAppHarness([
+    { id: "lead_at_row2", order: 1, data: { col_name: "Lead Starting at 2" } },
+  ]);
+
+  // Delete Row 1 (order 0)
+  await harness.handleDeleteRows(["temp_0"], { startRowIndex: 0, endRowIndex: 0, count: 1, deletedOrders: [0] });
+
+  assert.strictEqual(harness.dbRows.length, 1);
+  assert.strictEqual(harness.dbRows[0].id, "lead_at_row2");
+  assert.strictEqual(harness.dbRows[0].order, 0, "Lead shifted from order 1 to order 0 (Row 1)");
+});
+
+it("Scenario 5: Delete two consecutive empty rows individually (Scenario B) -> Row 44 deleted, then new Row 44 deleted", async () => {
+  // Row 43 (order 42): Lead 43
+  // Row 44 (order 43): empty
+  // Row 45 (order 44): empty
+  // Row 46 (order 45): Lead 46
+  const harness = new MockGridAppHarness([
+    { id: "lead_43", order: 42, data: { col_name: "Lead 43" } },
+    { id: "lead_46", order: 45, data: { col_name: "Lead 46" } },
+  ]);
+
+  // Step 1: Delete Row 44 (order 43)
+  await harness.handleDeleteRows(["temp_43"], { startRowIndex: 43, endRowIndex: 43, count: 1, deletedOrders: [43] });
+
+  assert.strictEqual(harness.dbRows[0].order, 42, "Lead 43 untouched");
+  assert.strictEqual(harness.dbRows[1].order, 44, "Lead 46 shifted from order 45 to 44 (now at visual Row 45)");
+
+  // Step 2: Delete new Row 44 (order 43, which was former Row 45)
+  await harness.handleDeleteRows(["temp_43"], { startRowIndex: 43, endRowIndex: 43, count: 1, deletedOrders: [43] });
+
+  assert.strictEqual(harness.dbRows[0].order, 42, "Lead 43 untouched");
+  assert.strictEqual(harness.dbRows[1].order, 43, "Lead 46 shifted from order 44 to 43 (now at visual Row 44)");
+  assert.strictEqual(harness.dbRows[1].data.col_name, "Lead 46", "Lead 46 data preserved");
+});
+
+it("Scenario 6: Delete multiple consecutive empty rows together (multi-row selection) -> Rows 44 and 45 deleted simultaneously", async () => {
+  const harness = new MockGridAppHarness([
+    { id: "lead_43", order: 42, data: { col_name: "Lead 43" } },
+    { id: "lead_46", order: 45, data: { col_name: "Lead 46" } },
+  ]);
+
+  // Select Rows 44 and 45 together (orders 43 and 44)
+  await harness.handleDeleteRows(["temp_43", "temp_44"], {
+    startRowIndex: 43,
+    endRowIndex: 44,
+    count: 2,
+    deletedOrders: [43, 44],
+  });
+
+  assert.strictEqual(harness.dbRows.length, 2);
+  assert.strictEqual(harness.dbRows[0].order, 42, "Lead 43 untouched");
+  assert.strictEqual(harness.dbRows[1].order, 43, "Lead 46 shifted directly by 2 to order 43 (Row 44)");
+});
+
+it("Scenario 7: Delete an empty row created after bulk paste -> empty row removed, newly pasted leads retain stable relative positions", async () => {
+  const harness = new MockGridAppHarness([
+    { id: "pasted_1", order: 0, data: { col_name: "Pasted A" } },
+    { id: "placeholder_gap", order: 1, data: {} },
+    { id: "pasted_2", order: 2, data: { col_name: "Pasted B" } },
+  ]);
+
+  // Delete the empty placeholder gap at order 1
+  await harness.handleDeleteRows(["placeholder_gap"], {
+    startRowIndex: 1,
+    endRowIndex: 1,
+    count: 1,
+    deletedOrders: [1],
+  });
+
+  assert.strictEqual(harness.dbRows.length, 2);
+  assert.strictEqual(harness.dbRows[0].id, "pasted_1");
+  assert.strictEqual(harness.dbRows[0].order, 0);
+  assert.strictEqual(harness.dbRows[1].id, "pasted_2");
+  assert.strictEqual(harness.dbRows[1].order, 1, "Pasted B shifted into order 1");
+  assert.strictEqual(harness.dbRows[1].data.col_name, "Pasted B");
+});
+
+it("Scenario 8: Delete a row and refresh the application (background sync) -> order changes persist in DB and display shifted rows", async () => {
+  const harness = new MockGridAppHarness([
+    { id: "r_1", order: 0, data: { col_name: "Lead 1" } },
+    { id: "r_2", order: 2, data: { col_name: "Lead 3" } },
+  ]);
+
+  // Delete empty row at order 1
+  await harness.handleDeleteRows(["temp_1"], { startRowIndex: 1, endRowIndex: 1, count: 1, deletedOrders: [1] });
+
+  // Simulate refresh / background sync
+  harness.triggerBackgroundSync();
+
+  assert.strictEqual(harness.sheet.rows[0].order, 0);
+  assert.strictEqual(harness.sheet.rows[1].order, 1, "Persisted order 1 maintained after refresh");
+  assert.strictEqual(harness.sheet.rows[1].data.col_name, "Lead 3");
+});
+
+it("Scenario 9: Switch member tabs after deletion -> member tab retains its shifted rows, other member sheets unaffected", async () => {
+  const harnessA = new MockGridAppHarness([
+    { id: "lead_m1", sheetId: "sheet_a", order: 0, data: { col_name: "Member A Lead 1" } },
+    { id: "lead_m2", sheetId: "sheet_a", order: 2, data: { col_name: "Member A Lead 2" } },
+  ]);
+  const harnessB = new MockGridAppHarness([
+    { id: "lead_b1", sheetId: "sheet_b", order: 0, data: { col_name: "Member B Lead 1" } },
+    { id: "lead_b2", sheetId: "sheet_b", order: 1, data: { col_name: "Member B Lead 2" } },
+  ]);
+
+  // Delete empty row in Sheet A
+  await harnessA.handleDeleteRows(["temp_1"], { startRowIndex: 1, endRowIndex: 1, count: 1, deletedOrders: [1] });
+
+  // Switch to Sheet B: verify completely untouched
+  assert.strictEqual(harnessB.dbRows[0].order, 0);
+  assert.strictEqual(harnessB.dbRows[1].order, 1);
+  assert.strictEqual(harnessB.dbRows.length, 2);
+
+  // Switch back to Sheet A: verify shifted rows intact
+  assert.strictEqual(harnessA.dbRows[1].order, 1);
+  assert.strictEqual(harnessA.dbRows[1].data.col_name, "Member A Lead 2");
+});
+
+it("Scenario 10: Verify all remaining lead IDs and values -> deleting a row modifies zero data fields in remaining leads", async () => {
+  const harness = new MockGridAppHarness([
+    { id: "row_keep_1", order: 0, data: { col_name: "Customer Alpha", col_number: "9988776655", col_budget: "1.5 Cr" } },
+    { id: "row_del", order: 1, data: { col_name: "To Delete", col_number: "1111111111" } },
+    { id: "row_keep_2", order: 2, data: { col_name: "Customer Beta", col_number: "9944332211", col_budget: "2 Cr" } },
+  ]);
+
+  await harness.handleDeleteRows(["row_del"], { startRowIndex: 1, endRowIndex: 1, count: 1, deletedOrders: [1] });
+
+  assert.strictEqual(harness.dbRows.length, 2);
+  assert.strictEqual(harness.dbRows[0].id, "row_keep_1");
+  assert.strictEqual(harness.dbRows[0].data.col_name, "Customer Alpha");
+  assert.strictEqual(harness.dbRows[0].data.col_number, "9988776655");
+  assert.strictEqual(harness.dbRows[0].data.col_budget, "1.5 Cr");
+
+  assert.strictEqual(harness.dbRows[1].id, "row_keep_2");
+  assert.strictEqual(harness.dbRows[1].data.col_name, "Customer Beta");
+  assert.strictEqual(harness.dbRows[1].data.col_number, "9944332211");
+  assert.strictEqual(harness.dbRows[1].data.col_budget, "2 Cr");
+});
+
+it("Scenario 11: Verify row ordering after deletion -> remaining rows have strictly contiguous and sequential order values", async () => {
+  const initialRows = [
+    { id: "r0", order: 0, data: { col_name: "R0" } },
+    { id: "r1", order: 1, data: { col_name: "R1" } },
+    { id: "r2", order: 2, data: { col_name: "R2" } },
+    { id: "r3", order: 3, data: { col_name: "R3" } },
+    { id: "r4", order: 4, data: { col_name: "R4" } },
+  ];
+  const harness = new MockGridAppHarness(initialRows);
+
+  // Delete row at index 2 (R2)
+  await harness.handleDeleteRows(["r2"], { startRowIndex: 2, endRowIndex: 2, count: 1, deletedOrders: [2] });
+
+  const remainingOrders = harness.dbRows.map((r) => r.order);
+  assert.deepStrictEqual(remainingOrders, [0, 1, 2, 3], "Orders are strictly contiguous: 0, 1, 2, 3");
+  assert.deepStrictEqual(harness.dbRows.map((r) => r.data.col_name), ["R0", "R1", "R3", "R4"]);
+});
+
+it("Scenario 12: Verify no unintended database records are deleted -> only specified row record deleted", async () => {
+  const harness = new MockGridAppHarness([
+    { id: "db_row_1", order: 0, data: { col_name: "L1" } },
+    { id: "db_row_2", order: 1, data: { col_name: "L2" } },
+    { id: "db_row_3", order: 2, data: { col_name: "L3" } },
+  ]);
+
+  // Delete empty row at order 5 (beyond existing rows)
+  await harness.handleDeleteRows(["temp_5"], { startRowIndex: 5, endRowIndex: 5, count: 1, deletedOrders: [5] });
+
+  assert.strictEqual(harness.dbRows.length, 3, "All 3 DB rows remain safe");
+  assert.strictEqual(harness.dbRows[0].id, "db_row_1");
+  assert.strictEqual(harness.dbRows[1].id, "db_row_2");
+  assert.strictEqual(harness.dbRows[2].id, "db_row_3");
 });
 
 testPromiseChain.then(() => {
