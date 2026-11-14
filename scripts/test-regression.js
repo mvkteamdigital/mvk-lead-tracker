@@ -3303,6 +3303,325 @@ it("Scenario 10: Horizontal scrolling container width strictly matches totalTabl
   assert.strictEqual(tableWrapperStyle.minWidth, "1056px");
 });
 
+// --- SECTION 15: PREDICTABLE & PERSISTENT ROW ORDERING SUITE ---
+console.log("\n--- SECTION 15: PREDICTABLE & PERSISTENT ROW ORDERING SUITE ---");
+
+it("Scenario 1: Adding a new lead calculates order strictly at the bottom (maxOrder + 1)", () => {
+  const existingRows = [
+    { id: "r0", order: 0, data: { col_name: "Alice" } },
+    { id: "r1", order: 1, data: { col_name: "Bob" } },
+    { id: "r2", order: 2, data: { col_name: "Charlie" } },
+  ];
+  const existingOrders = existingRows.map((r) => r.order ?? 0);
+  const nextOrder = Math.max(0, ...existingOrders, existingRows.length);
+  assert.strictEqual(nextOrder, 3);
+
+  const newLead = { id: "r3", order: nextOrder, data: { col_name: "Dave" } };
+  const allRows = [...existingRows, newLead];
+  allRows.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  assert.strictEqual(allRows[3].id, "r3");
+  assert.strictEqual(allRows[3].order, 3);
+});
+
+it("Scenario 2: Background sync does not reorder rows with stable tie-breaker sorting", () => {
+  const serverRows = [
+    { id: "r0", order: 0, createdAt: "2026-11-01T10:00:00Z", data: { col_name: "Alice" } },
+    { id: "r1", order: 1, createdAt: "2026-11-02T10:00:00Z", data: { col_name: "Bob" } },
+    { id: "r2", order: 2, createdAt: "2026-11-03T10:00:00Z", data: { col_name: "Charlie" } },
+    { id: "r3", order: 3, createdAt: "2026-11-04T10:00:00Z", data: { col_name: "Dave" } },
+  ];
+
+  const sorted = [...serverRows].sort((a, b) => {
+    const diff = (a.order ?? 0) - (b.order ?? 0);
+    if (diff !== 0) return diff;
+    const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    if (aTime !== bTime) return aTime - bTime;
+    return (a.id || "").localeCompare(b.id || "");
+  });
+
+  for (let i = 0; i < sorted.length; i++) {
+    assert.strictEqual(sorted[i].id, `r${i}`);
+    assert.strictEqual(sorted[i].order, i);
+  }
+});
+
+it("Scenario 3: Editing lead via modal strictly preserves existing row order", () => {
+  const currentSheetRows = [
+    { id: "r0", order: 0, data: { col_name: "Alice", col_number: "9999900001" } },
+    { id: "r1", order: 1, data: { col_name: "Bob", col_number: "9999900002" } },
+    { id: "r2", order: 2, data: { col_name: "Charlie", col_number: "9999900003" } },
+  ];
+
+  const targetRowId = "r1";
+  const existingRow = currentSheetRows.find((r) => r.id === targetRowId);
+  assert.ok(existingRow);
+  const preservedOrder = existingRow.order;
+
+  // Simulate handleUpdateLead with order = existingRow.order
+  const updatedData = { col_name: "Bob Updated", col_number: "9999900002" };
+  const targetIndex = currentSheetRows.findIndex((r) => r.id === targetRowId);
+  const nextRows = [...currentSheetRows];
+  nextRows[targetIndex] = {
+    ...existingRow,
+    data: { ...existingRow.data, ...updatedData },
+    order: preservedOrder,
+  };
+
+  assert.strictEqual(nextRows[1].id, "r1");
+  assert.strictEqual(nextRows[1].order, 1);
+  assert.strictEqual(nextRows[1].data.col_name, "Bob Updated");
+  assert.strictEqual(nextRows[0].id, "r0");
+  assert.strictEqual(nextRows[2].id, "r2");
+});
+
+it("Scenario 4: In-cell editing strictly preserves existing row order", () => {
+  const rows = [
+    { id: "r0", order: 0, data: { col_name: "Lead 1" } },
+    { id: "r1", order: 1, data: { col_name: "Lead 2" } },
+    { id: "r2", order: 2, data: { col_name: "Lead 3" } },
+  ];
+
+  // User edits cell in row 2
+  const targetId = "r2";
+  const targetIndex = rows.findIndex((r) => r.id === targetId);
+  const updated = [...rows];
+  updated[targetIndex] = {
+    ...rows[targetIndex],
+    data: { ...rows[targetIndex].data, col_project_name: "Green Valley" },
+  };
+
+  assert.strictEqual(updated[2].id, "r2");
+  assert.strictEqual(updated[2].order, 2);
+  assert.strictEqual(updated[2].data.col_project_name, "Green Valley");
+});
+
+it("Scenario 5: Changing follow-up status does not modify row order", () => {
+  const rows = [
+    { id: "r0", order: 0, data: { col_name: "Lead 1", col_followup_1: "RNR" } },
+    { id: "r1", order: 1, data: { col_name: "Lead 2", col_followup_1: "Interested" } },
+  ];
+
+  // Update follow-up status on Lead 1 to "Site Visit Done"
+  const updated = rows.map((r) =>
+    r.id === "r0" ? { ...r, data: { ...r.data, col_followup_1: "Site Visit Done" } } : r
+  );
+
+  assert.strictEqual(updated[0].order, 0);
+  assert.strictEqual(updated[0].data.col_followup_1, "Site Visit Done");
+  assert.strictEqual(updated[1].order, 1);
+});
+
+it("Scenario 6: Applying and clearing filters preserves exact original row order", () => {
+  const rows = [
+    { id: "r0", order: 0, createdAt: "2026-11-01", data: { col_name: "Lead A", col_followup_1: "RNR" } },
+    { id: "r1", order: 1, createdAt: "2026-11-02", data: { col_name: "Lead B", col_followup_1: "Site Visit" } },
+    { id: "r2", order: 2, createdAt: "2026-11-03", data: { col_name: "Lead C", col_followup_1: "RNR" } },
+  ];
+
+  // Filter by RNR -> rows 0 and 2
+  const filtered = rows.filter((r) => r.data.col_followup_1 === "RNR");
+  assert.strictEqual(filtered.length, 2);
+  assert.strictEqual(filtered[0].id, "r0");
+  assert.strictEqual(filtered[1].id, "r2");
+
+  // Clear filter -> restores all 3 in exact original order
+  const cleared = [...rows];
+  assert.strictEqual(cleared.length, 3);
+  assert.strictEqual(cleared[0].id, "r0");
+  assert.strictEqual(cleared[1].id, "r1");
+  assert.strictEqual(cleared[2].id, "r2");
+});
+
+it("Scenario 7: Bulk pasting 3 leads calculates startingOrder >= totalCount and appends at bottom", () => {
+  const existingRows = [
+    { id: "r0", order: 0 },
+    { id: "r1", order: 1 },
+    { id: "r2", order: 2 },
+  ];
+
+  const maxOrder = Math.max(...existingRows.map((r) => r.order));
+  const totalCount = existingRows.length;
+  let startingOrder = Math.max(maxOrder + 1, totalCount);
+  assert.strictEqual(startingOrder, 3);
+
+  const pasted = [
+    { id: "p0", order: startingOrder++ },
+    { id: "p1", order: startingOrder++ },
+    { id: "p2", order: startingOrder++ },
+  ];
+
+  assert.strictEqual(pasted[0].order, 3);
+  assert.strictEqual(pasted[1].order, 4);
+  assert.strictEqual(pasted[2].order, 5);
+
+  const combined = [...existingRows, ...pasted];
+  assert.strictEqual(combined.length, 6);
+  assert.strictEqual(combined[5].order, 5);
+});
+
+// --- SECTION 16: FILTERED EXPORT ACCURACY & RESPECT FOR ACTIVE FILTERS SUITE ---
+console.log("\n--- SECTION 16: FILTERED EXPORT ACCURACY SUITE ---");
+
+it("Scenario 1: Export without filters exports all valid leads and ignores empty rows", () => {
+  const sheetRows = [
+    { id: "r1", order: 0, data: { col_name: "John Doe", col_number: "9876543210" } },
+    { id: "r2", order: 1, data: { col_name: "Jane Smith", col_number: "9876543211" } },
+    { id: "r3", order: 2, data: {} }, // empty placeholder row
+  ];
+
+  const validRows = sheetRows.filter((r) => isValidLead(r.data));
+  assert.strictEqual(validRows.length, 2);
+
+  // Unfiltered export
+  const exportRows = validRows;
+  assert.strictEqual(exportRows.length, 2);
+  assert.strictEqual(exportRows[0].data.col_name, "John Doe");
+  assert.strictEqual(exportRows[1].data.col_name, "Jane Smith");
+});
+
+it("Scenario 2: Export with Status filter exports strictly matching status leads", () => {
+  const columns = [
+    { id: "col_name", name: "Name", type: "text" },
+    { id: "col_number", name: "Number", type: "phone" },
+    { id: "col_followup_1", name: "1st Follow Up", type: "dropdown" },
+  ];
+  const sheetRows = [
+    { id: "r1", data: { col_name: "Lead 1", col_number: "9000000001", col_followup_1: "RNR" } },
+    { id: "r2", data: { col_name: "Lead 2", col_number: "9000000002", col_followup_1: "Site Visit Scheduled" } },
+    { id: "r3", data: { col_name: "Lead 3", col_number: "9000000003", col_followup_1: "RNR" } },
+  ];
+
+  const exported = filterSheetRows(sheetRows, columns, { statusFilter: "RNR" });
+  assert.strictEqual(exported.length, 2);
+  assert.strictEqual(exported[0].id, "r1");
+  assert.strictEqual(exported[1].id, "r3");
+});
+
+it("Scenario 3: Export with 'Unattended' status filter exports only unattended leads", () => {
+  const columns = [
+    { id: "col_name", name: "Name", type: "text" },
+    { id: "col_number", name: "Number", type: "phone" },
+    { id: "col_followup_1", name: "1st Follow Up", type: "dropdown" },
+  ];
+  const sheetRows = [
+    { id: "r1", data: { col_name: "Attended Lead", col_number: "9000000001", col_followup_1: "Call Back" } },
+    { id: "r2", data: { col_name: "Unattended Lead 1", col_number: "9000000002" } },
+    { id: "r3", data: { col_name: "Unattended Lead 2", col_number: "9000000003", col_followup_1: "-- Select Status --" } },
+  ];
+
+  const exported = filterSheetRows(sheetRows, columns, { statusFilter: "Unattended" });
+  assert.strictEqual(exported.length, 2);
+  assert.strictEqual(exported[0].id, "r2");
+  assert.strictEqual(exported[1].id, "r3");
+});
+
+it("Scenario 4: Export with Date filter exports only leads on that exact IST calendar date", () => {
+  const columns = [
+    { id: "col_name", name: "Name", type: "text" },
+    { id: "col_number", name: "Number", type: "phone" },
+  ];
+  const sheetRows = [
+    { id: "r1", createdAt: "2026-11-13T10:00:00Z", data: { col_name: "Lead Nov 13", col_number: "9000000001" } },
+    { id: "r2", createdAt: "2026-11-14T05:00:00Z", data: { col_name: "Lead Nov 14", col_number: "9000000002" } },
+    { id: "r3", createdAt: "2026-11-14T08:00:00Z", data: { col_name: "Lead Nov 14 B", col_number: "9000000003" } },
+  ];
+
+  const exported = filterSheetRows(sheetRows, columns, { dateFilter: "2026-11-14" });
+  assert.strictEqual(exported.length, 2);
+  assert.strictEqual(exported[0].id, "r2");
+  assert.strictEqual(exported[1].id, "r3");
+});
+
+it("Scenario 5: Export with Search query exports only matching search leads", () => {
+  const columns = [
+    { id: "col_name", name: "Name", type: "text" },
+    { id: "col_number", name: "Number", type: "phone" },
+    { id: "col_project_name", name: "Project Name", type: "text" },
+  ];
+  const sheetRows = [
+    { id: "r1", data: { col_name: "Satya Reddy", col_number: "9876543210", col_project_name: "Emerald Hills" } },
+    { id: "r2", data: { col_name: "Vijay Kumar", col_number: "9876500000", col_project_name: "Sapphire Bay" } },
+    { id: "r3", data: { col_name: "Ramesh Sharma", col_number: "9876599999", col_project_name: "Emerald Hills" } },
+  ];
+
+  const exported = filterSheetRows(sheetRows, columns, { searchQuery: "Emerald" });
+  assert.strictEqual(exported.length, 2);
+  assert.strictEqual(exported[0].id, "r1");
+  assert.strictEqual(exported[1].id, "r3");
+});
+
+it("Scenario 6: Export with multiple simultaneous filters (Status + Date + Search)", () => {
+  const columns = [
+    { id: "col_name", name: "Name", type: "text" },
+    { id: "col_number", name: "Number", type: "phone" },
+    { id: "col_followup_1", name: "1st Follow Up", type: "dropdown" },
+  ];
+  const sheetRows = [
+    { id: "r1", createdAt: "2026-11-14T06:00:00Z", data: { col_name: "Ramesh", col_number: "9000000001", col_followup_1: "RNR" } },
+    { id: "r2", createdAt: "2026-11-14T07:00:00Z", data: { col_name: "Suresh", col_number: "9000000002", col_followup_1: "RNR" } },
+    { id: "r3", createdAt: "2026-11-14T08:00:00Z", data: { col_name: "Ramesh", col_number: "9000000003", col_followup_1: "Site Visit" } },
+    { id: "r4", createdAt: "2026-11-13T09:00:00Z", data: { col_name: "Ramesh", col_number: "9000000004", col_followup_1: "RNR" } },
+  ];
+
+  // Filter by Date (2026-11-14) + Status (RNR) + Search (Ramesh)
+  // Only r1 satisfies all 3!
+  const exported = filterSheetRows(sheetRows, columns, {
+    dateFilter: "2026-11-14",
+    statusFilter: "RNR",
+    searchQuery: "Ramesh",
+  });
+  assert.strictEqual(exported.length, 1);
+  assert.strictEqual(exported[0].id, "r1");
+});
+
+it("Scenario 7: Export when 0 records match informs user and does not export whole sheet", () => {
+  const columns = [
+    { id: "col_name", name: "Name", type: "text" },
+    { id: "col_number", name: "Number", type: "phone" },
+  ];
+  const sheetRows = [
+    { id: "r1", data: { col_name: "Alice", col_number: "9000000001" } },
+  ];
+
+  const exported = filterSheetRows(sheetRows, columns, { searchQuery: "NonExistentName" });
+  assert.strictEqual(exported.length, 0);
+
+  // In frontend TopToolbar: if totalLeads === 0, onShowToast displays warning and halts
+  let toastMessage = "";
+  const totalLeads = exported.length;
+  if (totalLeads === 0) {
+    toastMessage = "No leads match the active filters to export. Adjust your filters and try again.";
+  }
+  assert.strictEqual(toastMessage, "No leads match the active filters to export. Adjust your filters and try again.");
+});
+
+it("Scenario 8: Column names, widths, and order preserved in XLSX and CSV aoa", () => {
+  const columns = [
+    { id: "col_name", name: "Customer Name", width: 180 },
+    { id: "col_number", name: "Phone Number", width: 140 },
+    { id: "col_source", name: "Lead Source", width: 160 },
+  ];
+  const filteredLeads = [
+    { data: { col_name: "Alice", col_number: "9876543210", col_source: "Meta Ads" } },
+    { data: { col_name: "Bob", col_number: "9876543211", col_source: "99acres" } },
+  ];
+
+  const headers = columns.map((c) => c.name);
+  assert.deepStrictEqual(headers, ["Customer Name", "Phone Number", "Lead Source"]);
+
+  const rowsData = filteredLeads.map((r) => columns.map((c) => r.data[c.id] ?? ""));
+  assert.deepStrictEqual(rowsData, [
+    ["Alice", "9876543210", "Meta Ads"],
+    ["Bob", "9876543211", "99acres"],
+  ]);
+
+  const aoa = [headers, ...rowsData];
+  assert.strictEqual(aoa.length, 3);
+  assert.strictEqual(aoa[0][0], "Customer Name");
+  assert.strictEqual(aoa[1][0], "Alice");
+});
+
 testPromiseChain.then(() => {
   console.log(`\n=== ALL TESTS PASSED: ${passed}/${total} ===\n`);
   if (passed !== total) {

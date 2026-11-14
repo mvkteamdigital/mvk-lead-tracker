@@ -51,6 +51,8 @@ interface TopToolbarProps {
   totalLeads?: number;
   organizationTotalLeads?: number;
   dateFilter?: string | null;
+  statusFilter?: string | null;
+  onShowToast?: (message: string, type: "success" | "error" | "info") => void;
   onRefresh?: () => void;
   isRefreshing?: boolean;
 }
@@ -74,6 +76,8 @@ export function TopToolbar({
   totalLeads,
   organizationTotalLeads,
   dateFilter = null,
+  statusFilter = null,
+  onShowToast,
   onRefresh,
   isRefreshing = false,
 }: TopToolbarProps) {
@@ -107,10 +111,65 @@ export function TopToolbar({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const handleExport = (format: "xlsx" | "csv") => {
+  const handleExport = async (format: "xlsx" | "csv") => {
     if (!sheet) return;
-    window.open(`/api/sheets/${sheet.id}/export?format=${format}`, "_blank");
     setShowExportMenu(false);
+
+    // If active filters result in 0 leads, inform user immediately without downloading empty file
+    if (totalLeads === 0) {
+      if (onShowToast) {
+        onShowToast("No leads match the active filters to export. Adjust your filters and try again.", "info");
+      } else {
+        alert("No leads match the active filters to export.");
+      }
+      return;
+    }
+
+    const params = new URLSearchParams();
+    params.set("format", format);
+    if (dateFilter) params.set("dateFilter", dateFilter);
+    if (statusFilter) params.set("statusFilter", statusFilter);
+    if (searchQuery.trim()) params.set("searchQuery", searchQuery.trim());
+
+    try {
+      const exportUrl = `/api/sheets/${sheet.id}/export?${params.toString()}`;
+      const res = await fetch(exportUrl);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        if (onShowToast) {
+          onShowToast(err.error || "Failed to export sheet.", "error");
+        }
+        return;
+      }
+
+      const blob = await res.blob();
+      const contentDisposition = res.headers.get("Content-Disposition");
+      let filename = `${sheet.name || "Leads"}.${format}`;
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="?([^"]+)"?/);
+        if (match && match[1]) {
+          filename = decodeURIComponent(match[1]);
+        }
+      }
+
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+
+      if (onShowToast) {
+        onShowToast(`Exported ${totalLeads ?? ""} lead(s) successfully!`, "success");
+      }
+    } catch (e: any) {
+      console.error("Export error:", e);
+      if (onShowToast) {
+        onShowToast("Network error while exporting leads.", "error");
+      }
+    }
   };
 
   const handleExportAll = () => {

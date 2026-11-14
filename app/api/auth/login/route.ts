@@ -67,7 +67,29 @@ export async function POST(req: Request) {
 
     return response;
   } catch (error: any) {
-    console.error("Login error:", error);
+    console.error("[AUTH_LOGIN_ERROR] Exception occurred during login attempt:", error);
+
+    const errorMsg = String(error?.message || "");
+    const isDatabaseUnavailable =
+      error?.code === "P1001" ||
+      errorMsg.includes("Can't reach database server") ||
+      errorMsg.includes("exceeded the quota") ||
+      errorMsg.includes("53000");
+
+    if (isDatabaseUnavailable) {
+      console.error(
+        "[CRITICAL_DATABASE_ERROR] Production database is unreachable or Neon project quota has been exceeded. Details:",
+        errorMsg
+      );
+      return NextResponse.json(
+        {
+          error:
+            "Database service temporarily unavailable. The database quota limit has been reached. Please contact your administrator.",
+        },
+        { status: 503 }
+      );
+    }
+
     return NextResponse.json(
       { error: "An unexpected error occurred during login" },
       { status: 500 }

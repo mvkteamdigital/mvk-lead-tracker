@@ -106,10 +106,11 @@ export async function POST(req: Request, { params }: Params) {
 
     const lastRow = await prisma.row.findFirst({
       where: { sheetId },
-      orderBy: { order: "desc" },
+      orderBy: [{ order: "desc" }],
       select: { order: true },
     });
-    let startingOrder = (lastRow?.order ?? -1) + 1;
+    const totalCount = await prisma.row.count({ where: { sheetId } });
+    let startingOrder = Math.max((lastRow?.order ?? -1) + 1, totalCount);
 
     const rowsToAdd = Array.isArray(body) ? body : body.rows ? body.rows : [body];
 
@@ -137,7 +138,10 @@ export async function POST(req: Request, { params }: Params) {
 
     const createdRows = [];
     for (const item of rowsToAdd) {
-      const orderToUse = item.order !== undefined ? item.order : startingOrder++;
+      const orderToUse =
+        typeof item.order === "number" && item.order >= startingOrder
+          ? item.order
+          : startingOrder++;
       const dataObj = typeof item.data === "string" ? JSON.parse(item.data || "{}") : (item.data || {});
       const phone = getRowPhoneNumber(dataObj);
       const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
@@ -337,12 +341,13 @@ export async function PUT(req: Request, { params }: Params) {
         // If row does not exist in DB yet (editing one of the blank rows)
         const lastRow = await tx.row.findFirst({
           where: { sheetId },
-          orderBy: { order: "desc" },
+          orderBy: [{ order: "desc" }],
           select: { order: true },
         });
-        const nextOrder = (lastRow?.order ?? -1) + 1;
+        const totalCount = await tx.row.count({ where: { sheetId } });
+        const nextOrder = Math.max((lastRow?.order ?? -1) + 1, totalCount);
         const orderVal =
-          body.order !== undefined && body.order !== null && typeof body.order === "number"
+          body.order !== undefined && body.order !== null && typeof body.order === "number" && body.order >= 0
             ? body.order
             : nextOrder;
 
@@ -476,7 +481,7 @@ export async function PUT(req: Request, { params }: Params) {
               ...(isNameChanged ? { nameModifiedAt: new Date() } : {}),
               ...extractFollowupDates(merged),
               ...(r.styles ? { styles: typeof r.styles === "string" ? r.styles : JSON.stringify(r.styles) } : {}),
-              ...(r.order !== undefined ? { order: r.order } : {}),
+              // Strictly preserve existing.order on lead data updates so positions never change!
             },
           });
 
@@ -494,6 +499,16 @@ export async function PUT(req: Request, { params }: Params) {
         }
 
         // Create row if not yet saved in DB
+        const lastRow = await prisma.row.findFirst({
+          where: { sheetId },
+          orderBy: [{ order: "desc" }],
+          select: { order: true },
+        });
+        const totalCount = await prisma.row.count({ where: { sheetId } });
+        const fallbackOrder = Math.max((lastRow?.order ?? -1) + 1, totalCount);
+        const orderToUse =
+          typeof r.order === "number" && r.order >= 0 ? r.order : fallbackOrder;
+
         const newData = typeof r.data === "string" ? JSON.parse(r.data) : r.data || {};
         const phone = getRowPhoneNumber(newData);
         const { exact: phoneExact, digits: phoneDigits } = extractPhoneInfo(phone);
@@ -501,7 +516,7 @@ export async function PUT(req: Request, { params }: Params) {
         const created = await prisma.row.create({
           data: {
             sheetId,
-            order: r.order !== undefined ? r.order : 0,
+            order: orderToUse,
             phoneNumber: phoneExact || null,
             phoneDigits: phoneDigits || null,
             data: JSON.stringify(newData),

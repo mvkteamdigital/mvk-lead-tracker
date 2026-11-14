@@ -213,10 +213,13 @@ export async function POST(req: Request) {
 
     const lastRow = await prisma.row.findFirst({
       where: { sheetId },
-      orderBy: { order: "desc" },
+      orderBy: [{ order: "desc" }],
       select: { order: true },
     });
-    const orderToUse = body.order !== undefined ? body.order : (lastRow?.order ?? -1) + 1;
+    const totalCount = await prisma.row.count({ where: { sheetId } });
+    const nextOrder = Math.max((lastRow?.order ?? -1) + 1, totalCount);
+    const orderToUse =
+      typeof body.order === "number" && body.order >= 0 ? body.order : nextOrder;
 
     const now = new Date();
     const row = await prisma.row.create({

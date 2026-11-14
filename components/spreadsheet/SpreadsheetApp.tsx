@@ -574,7 +574,14 @@ export function SpreadsheetApp() {
           });
 
           const allRows = pendingTempRows.length > 0 ? [...mergedServerRows, ...pendingTempRows] : [...mergedServerRows];
-          allRows.sort((a: RowData, b: RowData) => (a.order ?? 0) - (b.order ?? 0));
+          allRows.sort((a: RowData, b: RowData) => {
+            const diff = (a.order ?? 0) - (b.order ?? 0);
+            if (diff !== 0) return diff;
+            const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+            const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+            if (aTime !== bTime) return aTime - bTime;
+            return (a.id || "").localeCompare(b.id || "");
+          });
 
           return {
             ...prev,
@@ -624,7 +631,14 @@ export function SpreadsheetApp() {
           });
 
           const allRows = pendingTempRows.length > 0 ? [...mergedServerRows, ...pendingTempRows] : [...mergedServerRows];
-          allRows.sort((a: RowData, b: RowData) => (a.order ?? 0) - (b.order ?? 0));
+          allRows.sort((a: RowData, b: RowData) => {
+            const diff = (a.order ?? 0) - (b.order ?? 0);
+            if (diff !== 0) return diff;
+            const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+            const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+            if (aTime !== bTime) return aTime - bTime;
+            return (a.id || "").localeCompare(b.id || "");
+          });
 
           return {
             ...prev,
@@ -1558,7 +1572,16 @@ export function SpreadsheetApp() {
 
     pushUndoSnapshot();
 
-    const rowOrder = order !== undefined ? order : activeCellRef.current?.rowIdx ?? 0;
+    const existingRow =
+      rowId && !rowId.startsWith("temp_")
+        ? currentSheet.rows.find((r) => r.id === rowId)
+        : undefined;
+    const rowOrder =
+      order !== undefined
+        ? order
+        : existingRow?.order !== undefined
+        ? existingRow.order
+        : activeCellRef.current?.rowIdx ?? currentSheet.rows.length;
 
     // Optimistically update local state immediately for zero-lag UI
     setActiveSheet((prev) => {
@@ -1658,12 +1681,13 @@ export function SpreadsheetApp() {
     if (!currentSheet) return;
 
     if (rowId && !rowId.startsWith("temp_")) {
-      // Update existing lead using unified handler
-      await handleUpdateLead(rowId, data);
+      // Update existing lead using unified handler, strictly preserving its existing row order
+      const existingRow = currentSheet.rows.find((r) => r.id === rowId);
+      await handleUpdateLead(rowId, data, existingRow?.order);
     } else {
-      // Create new lead in database
+      // Create new lead in database strictly at the bottom
       const existingOrders = currentSheet.rows.map((r) => r.order ?? 0);
-      const nextOrder = existingOrders.length > 0 ? Math.max(...existingOrders) + 1 : 0;
+      const nextOrder = Math.max(0, ...existingOrders, currentSheet.rows.length);
 
       setSavingStatus("saving");
       try {
@@ -1818,6 +1842,8 @@ export function SpreadsheetApp() {
         totalLeads={displayedLeadCount}
         organizationTotalLeads={organizationTotalLeads}
         dateFilter={dateFilter}
+        statusFilter={statusFilter}
+        onShowToast={showToast}
         onRefresh={handleRefreshFromDB}
         isRefreshing={isRefreshing}
       />

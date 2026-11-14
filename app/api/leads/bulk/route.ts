@@ -139,14 +139,11 @@ export async function POST(req: Request) {
 
     const lastRow = await prisma.row.findFirst({
       where: { sheetId },
-      orderBy: [
-        { order: "desc" },
-        { createdAt: "desc" },
-        { id: "desc" },
-      ],
+      orderBy: [{ order: "desc" }],
       select: { order: true },
     });
-    let startingOrder = (lastRow?.order ?? -1) + 1;
+    const totalCount = await prisma.row.count({ where: { sheetId } });
+    let startingOrder = Math.max((lastRow?.order ?? -1) + 1, totalCount);
 
     const seenDigitsInBatch = new Set<string>();
     const duplicates: any[] = [];
@@ -161,10 +158,10 @@ export async function POST(req: Request) {
       const leadName = getLeadName(dataObj);
 
       // PREDICTABLE GOOGLE SHEETS POSITIONING:
-      // If the client specified a specific row position (item.order), preserve that exact row position.
-      // If omitted, append at startingOrder.
+      // If the client specified a specific valid row position, preserve it.
+      // If omitted or invalid, strictly append at startingOrder.
       const orderToUse =
-        item.order !== undefined && item.order !== null && typeof item.order === "number"
+        item.order !== undefined && item.order !== null && typeof item.order === "number" && item.order >= startingOrder
           ? item.order
           : startingOrder++;
 

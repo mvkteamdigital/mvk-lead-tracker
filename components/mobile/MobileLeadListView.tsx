@@ -318,7 +318,14 @@ export function MobileLeadListView({
       statusFilter,
       searchQuery,
     });
-    return [...list].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    return [...list].sort((a, b) => {
+      const diff = (a.order ?? 0) - (b.order ?? 0);
+      if (diff !== 0) return diff;
+      const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      if (aTime !== bTime) return aTime - bTime;
+      return (a.id || "").localeCompare(b.id || "");
+    });
   }, [sheet.rows, sheet.columns, searchQuery, statusFilter, dateFilter]);
 
   return (
