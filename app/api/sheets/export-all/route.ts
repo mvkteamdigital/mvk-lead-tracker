@@ -10,9 +10,9 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (user.role !== "ADMIN") {
+  if (user.role !== "ADMIN" && user.role !== "VIEWER") {
     return NextResponse.json(
-      { error: "Only administrators can export all team sheets" },
+      { error: "Only administrators and team leads can export all team sheets" },
       { status: 403 }
     );
   }

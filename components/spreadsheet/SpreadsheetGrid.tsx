@@ -55,6 +55,7 @@ interface SpreadsheetGridProps {
   onRedo?: () => void;
   canUndo?: boolean;
   canRedo?: boolean;
+  isReadOnly?: boolean;
 }
 
 const ROW_HEIGHT = 36;
@@ -537,6 +538,7 @@ export function SpreadsheetGrid({
   onRedo,
   canUndo,
   canRedo,
+  isReadOnly = false,
 }: SpreadsheetGridProps) {
   // 1,000 default rows support with dynamic expansion
   const [expandedRowCount, setExpandedRowCount] = useState(1000);
@@ -963,6 +965,7 @@ export function SpreadsheetGrid({
 
   // Start in-cell edit
   const startEditing = useCallback((row: RowData, rowIdx: number, col: ColumnDef) => {
+    if (isReadOnly) return;
     if (col.type === "dropdown") return;
     const initialVal = row.data[col.id] || "";
     setEditValue(initialVal);
@@ -972,7 +975,7 @@ export function SpreadsheetGrid({
       rowIdx,
       order: row.order !== undefined ? row.order : rowIdx,
     });
-  }, [setEditValue, setEditingCell]);
+  }, [isReadOnly, setEditValue, setEditingCell]);
 
   // Handle cell double click
   const handleCellDoubleClick = useCallback((row: RowData, rowIdx: number, col: ColumnDef) => {
@@ -1118,6 +1121,7 @@ export function SpreadsheetGrid({
     setActiveCell({ rowId: row.id, rowIdx, colId: col.id, colName: col.name });
     setSelectionAnchor({ rowIdx, colIdx });
     setSelectionFocus({ rowIdx, colIdx });
+    if (isReadOnly) return;
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const isSource = col.id === "col_lead_source" || col.name.toLowerCase().includes("source");
     const fallbackOptions = isSource ? DEFAULT_LEAD_SOURCES : DEFAULT_FOLLOWUP_OPTIONS;
@@ -1150,6 +1154,7 @@ export function SpreadsheetGrid({
   const handleRowContextMenu = useCallback(
     (e: React.MouseEvent, rowId: string, rowIdx: number) => {
       e.preventDefault();
+      if (isReadOnly) return;
       if (editingCellRef.current) {
         commitEditRef.current();
       }
@@ -1161,7 +1166,7 @@ export function SpreadsheetGrid({
         rowIdx,
       });
     },
-    [sheet.columns]
+    [isReadOnly, sheet.columns]
   );
 
   // Global click outside grid to commit active in-cell editing
@@ -1555,6 +1560,14 @@ export function SpreadsheetGrid({
         return;
       }
 
+      // Read-only mode: block editing keystrokes (F2, Enter on cell, Delete, Backspace, direct typing)
+      if (isReadOnly) {
+        if (e.key === "Delete" || e.key === "Backspace" || e.key === "F2") {
+          e.preventDefault();
+        }
+        return;
+      }
+
       // 7. F2 to start editing active cell
       if (e.key === "F2") {
         e.preventDefault();
@@ -1668,6 +1681,8 @@ export function SpreadsheetGrid({
       // Explicitly prevent browser default action and stop bubbling to eliminate page reloads and DOM glitches
       e.preventDefault();
       e.stopPropagation();
+
+      if (isReadOnly) return;
 
       const currentActive = activeCellRef.current || activeCell;
       const currentSheet = sheetRef.current || sheet;
@@ -1884,6 +1899,7 @@ export function SpreadsheetGrid({
     col: ColumnDef
   ) => {
     e.preventDefault();
+    if (isReadOnly) return;
     if (editingCellRef.current) {
       commitEditRef.current();
     }
@@ -2050,7 +2066,7 @@ export function SpreadsheetGrid({
                     onDrop={(e) => handleColDrop(e, colIdx)}
                     onDragEnd={handleColDragEnd}
                     onClick={(e) => handleColumnHeaderClick(e, colIdx, col)}
-                    onDoubleClick={() => handleStartRenameColumn(col)}
+                    onDoubleClick={() => !isReadOnly && handleStartRenameColumn(col)}
                     className={`relative border-b-2 border-r border-slate-400/40 px-2.5 py-2 text-left font-semibold text-xs tracking-wide select-none group transition-all cursor-pointer ${headerBg} ${
                       isColSelected ? "ring-2 ring-blue-600 bg-blue-100 text-blue-950 font-black shadow-inner" : "hover:brightness-95"
                     } ${isBeingDragged ? "opacity-30 scale-95 shadow-inner" : ""} ${
@@ -2405,7 +2421,7 @@ export function SpreadsheetGrid({
       )}
 
       {/* Right-Click Cell / Row Context Menu */}
-      {contextMenu && (
+      {contextMenu && !isReadOnly && (
         <div
           style={{ top: `${contextMenu.y}px`, left: `${contextMenu.x}px` }}
           className="fixed z-50 bg-white rounded-xl shadow-2xl border border-slate-200 py-1.5 w-52 text-slate-800 animate-in fade-in zoom-in-95 text-xs"

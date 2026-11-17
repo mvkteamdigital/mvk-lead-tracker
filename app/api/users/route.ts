@@ -183,13 +183,15 @@ export async function POST(req: Request) {
 
     const hashedPassword = await bcrypt.hash(password.trim(), 10);
 
+    const validRole = ["ADMIN", "VIEWER"].includes(role) ? role : "MEMBER";
+
     const newUser = await prisma.user.create({
       data: {
         name: name.trim(),
         email: normalizedEmail,
         password: hashedPassword,
         displayPassword: password.trim(),
-        role: role === "ADMIN" ? "ADMIN" : "MEMBER",
+        role: validRole,
         status: "ACTIVE",
         mustChangePassword: false,
       },
@@ -199,46 +201,47 @@ export async function POST(req: Request) {
         email: true,
         role: true,
         status: true,
-        displayPassword: true,
         mustChangePassword: true,
         createdAt: true,
         updatedAt: true,
       },
     });
 
-    // Handle sheet tab assignment
+    // Handle sheet tab assignment (Viewer accounts do NOT receive individual sheets)
     let assignedSheet = null;
-    if (sheetOption === "new") {
-      const sheetCount = await prisma.sheet.count();
-      const newSheet = await prisma.sheet.create({
-        data: {
-          name: name.trim(),
-          userId: newUser.id,
-          order: sheetCount,
-          columns: JSON.stringify(DEFAULT_COLUMNS),
-        },
-        select: {
-          id: true,
-          name: true,
-          _count: {
-            select: { rows: true },
+    if (validRole !== "VIEWER") {
+      if (sheetOption === "new") {
+        const sheetCount = await prisma.sheet.count();
+        const newSheet = await prisma.sheet.create({
+          data: {
+            name: name.trim(),
+            userId: newUser.id,
+            order: sheetCount,
+            columns: JSON.stringify(DEFAULT_COLUMNS),
           },
-        },
-      });
-      assignedSheet = newSheet;
-    } else if (sheetOption && sheetOption !== "none") {
-      const existingSheet = await prisma.sheet.update({
-        where: { id: sheetOption },
-        data: { userId: newUser.id },
-        select: {
-          id: true,
-          name: true,
-          _count: {
-            select: { rows: true },
+          select: {
+            id: true,
+            name: true,
+            _count: {
+              select: { rows: true },
+            },
           },
-        },
-      });
-      assignedSheet = existingSheet;
+        });
+        assignedSheet = newSheet;
+      } else if (sheetOption && sheetOption !== "none") {
+        const existingSheet = await prisma.sheet.update({
+          where: { id: sheetOption },
+          data: { userId: newUser.id },
+          select: {
+            id: true,
+            name: true,
+            _count: {
+              select: { rows: true },
+            },
+          },
+        });
+        assignedSheet = existingSheet;
+      }
     }
 
     return NextResponse.json({
@@ -314,28 +317,67 @@ export async function PUT(req: Request) {
     const updateData: any = {};
 
     if (status !== undefined) {
-      if (status !== "ACTIVE" && status !== "REVOKED") {
-        return NextResponse.json({ error: "Invalid status value" }, { status: 400 });
+      const normalizedStatus = status === "INACTIVE" ? "REVOKED" : status;
+      if (normalizedStatus !== "ACTIVE" && normalizedStatus !== "REVOKED") {
+        return NextResponse.json({ error: "Invalid status value. Allowed values are ACTIVE and REVOKED/INACTIVE." }, { status: 400 });
       }
-      if (targetUser.role === "ADMIN" && status === "REVOKED") {
-        return NextResponse.json({ error: "Cannot revoke Administrator access." }, { status: 400 });
+      if (targetUser.id === user.id && normalizedStatus === "REVOKED") {
+        return NextResponse.json({ error: "Cannot revoke your own account access." }, { status: 400 });
       }
-      updateData.status = status;
+      if (targetUser.role === "ADMIN" && normalizedStatus === "REVOKED") {
+        const activeAdminCount = await prisma.user.count({
+          where: { role: "ADMIN", status: "ACTIVE" },
+        });
+        if (activeAdminCount <= 1) {
+          return NextResponse.json({ error: "Cannot revoke the last active Administrator account." }, { status: 400 });
+        }
+      }
+      updateData.status = normalizedStatus;
     }
 
     if (role !== undefined) {
-      if (role === "ADMIN" || role === "MEMBER") {
-        updateData.role = role;
+      if (!["ADMIN", "MEMBER", "VIEWER"].includes(role)) {
+        return NextResponse.json(
+          { error: "Invalid role. Allowed roles are ADMIN, MEMBER, and VIEWER." },
+          { status: 400 }
+        );
+      }
+      if (targetUser.id === user.id && role !== "ADMIN") {
+        return NextResponse.json(
+          { error: "Cannot change your own administrative role. Another administrator must modify your role." },
+          { status: 400 }
+        );
+      }
+      if (targetUser.role === "ADMIN" && role !== "ADMIN") {
+        const activeAdminCount = await prisma.user.count({
+          where: { role: "ADMIN", status: "ACTIVE" },
+        });
+        if (activeAdminCount <= 1) {
+          return NextResponse.json(
+            { error: "Cannot demote the last active Administrator account." },
+            { status: 400 }
+          );
+        }
+      }
+      updateData.role = role;
+
+      if (role === "VIEWER") {
+        // Viewer accounts (Team Lead) do not have individual sheet assignments
+        // Unassign any sheets currently owned by this user so they are preserved in the organization
+        await prisma.sheet.updateMany({
+          where: { userId },
+          data: { userId: null },
+        });
       }
     }
 
     if (email !== undefined && email.trim()) {
       const normalizedEmail = email.trim().toLowerCase();
-      if (normalizedEmail !== targetUser.email) {
+      if (normalizedEmail !== targetUser.email.toLowerCase()) {
         const existing = await prisma.user.findUnique({
           where: { email: normalizedEmail },
         });
-        if (existing) {
+        if (existing && existing.id !== targetUser.id) {
           return NextResponse.json(
             { error: "This email address is already in use by another user." },
             { status: 400 }
@@ -359,32 +401,37 @@ export async function PUT(req: Request) {
       updateData.password = await bcrypt.hash(newPassword.trim(), 10);
       updateData.displayPassword = newPassword.trim();
       updateData.mustChangePassword = false;
+      console.log(`[AUTH AUDIT] Administrator "${user.email}" (${user.id}) reset password for user "${targetUser.email}" (${targetUser.id}). Effective immediately.`);
     }
 
-    // Sheet assignment updates
-    if (assignSheetId) {
-      await prisma.sheet.update({
-        where: { id: assignSheetId },
-        data: { userId },
-      });
+    // Sheet assignment updates (Ignored for VIEWER role accounts)
+    const isTargetViewer = (role === "VIEWER") || (!role && targetUser.role === "VIEWER");
+
+    if (!isTargetViewer) {
+      if (assignSheetId) {
+        await prisma.sheet.update({
+          where: { id: assignSheetId },
+          data: { userId },
+        });
+      }
+
+      if (newSheetName && newSheetName.trim()) {
+        const sheetCount = await prisma.sheet.count();
+        await prisma.sheet.create({
+          data: {
+            name: newSheetName.trim(),
+            userId,
+            order: sheetCount,
+            columns: JSON.stringify(DEFAULT_COLUMNS),
+          },
+        });
+      }
     }
 
     if (unassignSheetId) {
       await prisma.sheet.update({
         where: { id: unassignSheetId },
         data: { userId: null },
-      });
-    }
-
-    if (newSheetName && newSheetName.trim()) {
-      const sheetCount = await prisma.sheet.count();
-      await prisma.sheet.create({
-        data: {
-          name: newSheetName.trim(),
-          userId,
-          order: sheetCount,
-          columns: JSON.stringify(DEFAULT_COLUMNS),
-        },
       });
     }
 
@@ -434,7 +481,6 @@ export async function PUT(req: Request) {
         email: true,
         role: true,
         status: true,
-        displayPassword: true,
         mustChangePassword: true,
         updatedAt: true,
         sheets: {
@@ -475,7 +521,6 @@ export async function PUT(req: Request) {
         email: updated.email,
         role: updated.role,
         status: updated.status,
-        displayPassword: updated.displayPassword,
         mustChangePassword: updated.mustChangePassword,
         updatedAt: updated.updatedAt,
         sheets: formattedSheets,
@@ -514,10 +559,14 @@ export async function DELETE(req: Request) {
   }
 
   try {
-    const { userId } = await req.json();
+    const { userId, reassignToUserId } = await req.json();
 
     if (!userId) {
       return NextResponse.json({ error: "userId is required" }, { status: 400 });
+    }
+
+    if (userId === user.id) {
+      return NextResponse.json({ error: "Cannot delete your own account." }, { status: 400 });
     }
 
     const targetUser = await prisma.user.findUnique({
@@ -532,20 +581,57 @@ export async function DELETE(req: Request) {
     }
 
     if (targetUser.role === "ADMIN") {
-      return NextResponse.json(
-        { error: "Cannot delete an Administrator account." },
-        { status: 400 }
-      );
+      const activeAdminCount = await prisma.user.count({
+        where: { role: "ADMIN", status: "ACTIVE" },
+      });
+      if (activeAdminCount <= 1) {
+        return NextResponse.json(
+          { error: "Cannot delete the last active Administrator account." },
+          { status: 400 }
+        );
+      }
     }
 
-    // Delete user account - sheets are automatically kept safe with userId set to null (SetNull)
-    await prisma.user.delete({
-      where: { id: userId },
+    if (reassignToUserId) {
+      if (reassignToUserId === userId) {
+        return NextResponse.json(
+          { error: "Cannot reassign sheets to the member being removed." },
+          { status: 400 }
+        );
+      }
+      const destUser = await prisma.user.findUnique({
+        where: { id: reassignToUserId },
+        select: { id: true, name: true, email: true },
+      });
+      if (!destUser) {
+        return NextResponse.json(
+          { error: "Destination user for sheet reassignment not found." },
+          { status: 404 }
+        );
+      }
+    }
+
+    // Delete user account safely in transaction - if reassignToUserId provided, transfer sheets first;
+    // otherwise Prisma's onDelete: SetNull retains all sheets as unassigned without losing any rows.
+    await prisma.$transaction(async (tx) => {
+      if (reassignToUserId) {
+        await tx.sheet.updateMany({
+          where: { userId },
+          data: { userId: reassignToUserId },
+        });
+      }
+      await tx.user.delete({
+        where: { id: userId },
+      });
     });
+
+    const reassignedMsg = reassignToUserId
+      ? "Associated sheets were safely reassigned."
+      : "Associated sheets were safely retained as unassigned.";
 
     return NextResponse.json({
       success: true,
-      message: `User account ${targetUser.email} has been permanently removed. Associated sheets were safely retained.`,
+      message: `User account ${targetUser.email} has been permanently removed. ${reassignedMsg}`,
     });
   } catch (error: any) {
     console.error("Admin user delete error:", error);

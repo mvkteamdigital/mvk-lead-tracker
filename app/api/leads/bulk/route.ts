@@ -80,6 +80,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  if (user.role === "VIEWER") {
+    return NextResponse.json(
+      { error: "Forbidden: Viewers have read-only permissions." },
+      { status: 403 }
+    );
+  }
+
   try {
     const body = await req.json();
     let sheetId = body.sheetId;
@@ -295,6 +302,13 @@ export async function PATCH(req: Request) {
   const user = await getSessionUser(req);
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (user.role === "VIEWER") {
+    return NextResponse.json(
+      { error: "Forbidden: Viewers have read-only permissions." },
+      { status: 403 }
+    );
   }
 
   try {

@@ -8,6 +8,7 @@ interface FormulaBarProps {
   cellValue: string;
   onCellValueChange: (val: string) => void;
   onCommit?: () => void;
+  readOnly?: boolean;
 }
 
 export function FormulaBar({
@@ -15,6 +16,7 @@ export function FormulaBar({
   cellValue,
   onCellValueChange,
   onCommit,
+  readOnly = false,
 }: FormulaBarProps) {
   const [localValue, setLocalValue] = useState(cellValue);
   const [isFocused, setIsFocused] = useState(false);
@@ -29,6 +31,7 @@ export function FormulaBar({
   }, [cellValue, isFocused, activeCell]);
 
   const commitValue = () => {
+    if (readOnly) return;
     if (localValue !== lastCommittedValueRef.current) {
       lastCommittedValueRef.current = localValue;
       onCellValueChange(localValue);
@@ -56,19 +59,25 @@ export function FormulaBar({
       {/* Formula Input */}
       <input
         type="text"
-        disabled={!activeCell}
+        disabled={!activeCell || readOnly}
+        readOnly={readOnly}
         value={isFocused ? localValue : cellValue}
         onFocus={() => {
+          if (readOnly) return;
           setIsFocused(true);
           setLocalValue(cellValue);
           lastCommittedValueRef.current = cellValue;
         }}
-        onChange={(e) => setLocalValue(e.target.value)}
+        onChange={(e) => {
+          if (!readOnly) setLocalValue(e.target.value);
+        }}
         onBlur={() => {
+          if (readOnly) return;
           setIsFocused(false);
           commitValue();
         }}
         onKeyDown={(e) => {
+          if (readOnly) return;
           if (e.key === "Enter") {
             commitValue();
             e.currentTarget.blur();
@@ -79,6 +88,10 @@ export function FormulaBar({
           }
         }}
         onPaste={(e) => {
+          if (readOnly) {
+            e.preventDefault();
+            return;
+          }
           const pastedData = e.clipboardData.getData("text/plain");
           e.preventDefault();
           e.stopPropagation();
@@ -89,8 +102,16 @@ export function FormulaBar({
             .trim();
           setLocalValue(cleanVal);
         }}
-        placeholder={activeCell ? "Enter value or lead data..." : "Select cell to edit"}
-        className="flex-1 px-2 py-0.5 bg-transparent border-0 outline-none text-slate-800 focus:bg-slate-50 rounded text-xs"
+        placeholder={
+          readOnly
+            ? activeCell
+              ? "Viewing cell data (Read-Only)"
+              : "Select a cell to view"
+            : activeCell
+            ? "Enter value or lead data..."
+            : "Select cell to edit"
+        }
+        className="flex-1 px-2 py-0.5 bg-transparent border-0 outline-none text-slate-800 focus:bg-slate-50 rounded text-xs disabled:cursor-not-allowed disabled:text-slate-600"
       />
     </div>
   );

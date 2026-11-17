@@ -125,8 +125,8 @@ export async function GET(req: Request, { params }: Params) {
       return NextResponse.json({ error: "Sheet not found" }, { status: 404 });
     }
 
-    // Strict access control: MEMBER can ONLY view their own sheet
-    if (user.role !== "ADMIN" && sheet.userId !== user.id) {
+    // Strict access control: MEMBER can ONLY view their own sheet; ADMIN and VIEWER (Team Lead) can view all sheets
+    if (user.role !== "ADMIN" && user.role !== "VIEWER" && sheet.userId !== user.id) {
       return NextResponse.json(
         { error: "Access denied. You do not have permission to view this sheet." },
         { status: 403 }
@@ -212,7 +212,14 @@ export async function PUT(req: Request, { params }: Params) {
       return NextResponse.json({ error: "Sheet not found" }, { status: 404 });
     }
 
-    // Role check: Only admin or the sheet's assigned member can update
+    // Role check: Viewers are read-only; otherwise only admin or assigned member can update
+    if (user.role === "VIEWER") {
+      return NextResponse.json(
+        { error: "Access denied. Viewers have read-only permissions." },
+        { status: 403 }
+      );
+    }
+
     if (user.role !== "ADMIN" && existing.userId !== user.id) {
       return NextResponse.json(
         { error: "Access denied. You do not have permission to edit this sheet." },

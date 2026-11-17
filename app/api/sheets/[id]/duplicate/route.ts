@@ -30,7 +30,14 @@ export async function POST(req: Request, { params }: Params) {
       return NextResponse.json({ error: "Source sheet not found" }, { status: 404 });
     }
 
-    // Authorization: Admin can duplicate any sheet; Member can only duplicate their own sheet
+    // Authorization: Admin can duplicate any sheet; Member can only duplicate their own sheet; Viewer cannot duplicate
+    if (user.role === "VIEWER") {
+      return NextResponse.json(
+        { error: "Forbidden: Viewers have read-only permissions." },
+        { status: 403 }
+      );
+    }
+
     if (user.role !== "ADMIN" && sourceSheet.userId !== user.id) {
       return NextResponse.json(
         { error: "Forbidden: You do not have permission to duplicate this sheet." },

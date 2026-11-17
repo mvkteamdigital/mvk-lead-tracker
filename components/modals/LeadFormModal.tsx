@@ -28,6 +28,7 @@ interface LeadFormModalProps {
   sheetName: string;
   onSave: (data: Record<string, string>, rowId?: string) => Promise<void>;
   onDelete?: (rowId: string) => Promise<void>;
+  isReadOnly?: boolean;
 }
 
 export function LeadFormModal({
@@ -38,6 +39,7 @@ export function LeadFormModal({
   sheetName,
   onSave,
   onDelete,
+  isReadOnly = false,
 }: LeadFormModalProps) {
   const [formData, setFormData] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
@@ -166,8 +168,13 @@ export function LeadFormModal({
               <User className="h-5 w-5" />
             </div>
             <div>
-              <h3 className="font-bold text-base leading-tight">
-                {isEditing ? "Edit Lead Details" : "Add New Lead"}
+              <h3 className="font-bold text-base leading-tight flex items-center gap-2">
+                <span>{isReadOnly ? "Lead Details" : isEditing ? "Edit Lead Details" : "Add New Lead"}</span>
+                {isReadOnly && (
+                  <span className="px-2 py-0.5 rounded-full bg-slate-700 text-slate-300 text-[10px] font-bold">
+                    Read-Only
+                  </span>
+                )}
               </h3>
               <p className="text-xs text-slate-300">
                 Sheet: <span className="text-amber-400 font-semibold">{sheetName}</span>
@@ -184,6 +191,7 @@ export function LeadFormModal({
 
         {/* Scrollable Form Body (All Fields Dynamically Bound to Grid Headers) */}
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
+          <fieldset disabled={isReadOnly} className="contents space-y-4">
           {error && (
             <div
               className={`p-3.5 text-xs rounded-xl flex items-start gap-2.5 font-medium border animate-in fade-in ${
@@ -597,46 +605,64 @@ export function LeadFormModal({
               ))}
             </div>
           )}
+          </fieldset>
         </form>
 
         {/* Sticky Action Footer */}
         <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
-          {isEditing && onDelete ? (
-            <button
-              type="button"
-              onClick={handleDelete}
-              disabled={deleting || saving}
-              className="px-3.5 py-2.5 text-rose-600 hover:bg-rose-50 rounded-xl font-semibold text-xs flex items-center gap-1.5 transition-colors border border-rose-200"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              <span>Delete</span>
-            </button>
+          {isReadOnly ? (
+            <>
+              <div className="text-xs text-slate-500 italic">
+                Viewing lead in read-only mode.
+              </div>
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl transition-all shadow-xs"
+              >
+                Close
+              </button>
+            </>
           ) : (
-            <div />
-          )}
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-4 py-2.5 text-slate-600 hover:text-slate-900 rounded-xl font-semibold text-xs transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={saving}
-              className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold text-xs rounded-xl shadow-md hover:shadow-lg transition-all flex items-center gap-1.5 disabled:opacity-50"
-            >
-              {saving ? (
-                <span className="inline-block h-3.5 w-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            <>
+              {isEditing && onDelete ? (
+                <button
+                  type="button"
+                  onClick={handleDelete}
+                  disabled={deleting || saving}
+                  className="px-3.5 py-2.5 text-rose-600 hover:bg-rose-50 rounded-xl font-semibold text-xs flex items-center gap-1.5 transition-colors border border-rose-200"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  <span>Delete</span>
+                </button>
               ) : (
-                <Check className="h-4 w-4 text-emerald-400" />
+                <div />
               )}
-              <span>{isEditing ? "Save / Update Lead" : "Create Lead"}</span>
-            </button>
-          </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-2.5 text-slate-600 hover:text-slate-900 rounded-xl font-semibold text-xs transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSubmit}
+                  disabled={saving}
+                  className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold text-xs rounded-xl shadow-md hover:shadow-lg transition-all flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {saving ? (
+                    <span className="inline-block h-3.5 w-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Check className="h-4 w-4 text-emerald-400" />
+                  )}
+                  <span>{isEditing ? "Save / Update Lead" : "Create Lead"}</span>
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
       </div>

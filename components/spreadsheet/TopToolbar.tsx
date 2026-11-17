@@ -29,6 +29,7 @@ import {
   User,
   Undo2,
   Redo2,
+  Eye,
   X,
 } from "lucide-react";
 
@@ -213,8 +214,8 @@ export function TopToolbar({
                 MVK Lead Tracker
               </span>
 
-              {/* PART 3: Admin Organization-Wide Total Lead Count (Visible on mobile and desktop directly beside title) */}
-              {user?.role === "ADMIN" && organizationTotalLeads !== undefined && (
+              {/* Organization-Wide Total Lead Count (Visible on mobile and desktop for Admin and Team Lead / Viewer) */}
+              {(user?.role === "ADMIN" || user?.role === "VIEWER") && organizationTotalLeads !== undefined && (
                 <div className="flex items-center gap-1 sm:gap-1.5 whitespace-nowrap">
                   <span className="text-slate-300 font-light select-none text-xs">|</span>
                   <span
@@ -226,6 +227,20 @@ export function TopToolbar({
                     <span className="text-[9px] px-1 py-0.2 bg-amber-200 text-amber-900 font-bold rounded uppercase hidden sm:inline">
                       Org Total
                     </span>
+                  </span>
+                </div>
+              )}
+
+              {/* Viewer Role Read-Only Badge */}
+              {user?.role === "VIEWER" && (
+                <div className="flex items-center gap-1 sm:gap-1.5 whitespace-nowrap">
+                  <span className="text-slate-300 font-light select-none text-xs">|</span>
+                  <span
+                    className="text-[10px] sm:text-xs px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-800 font-bold border border-amber-300 shadow-2xs flex items-center gap-1"
+                    title="Team Lead / Sales Supervisor: Organization-wide read-only visibility"
+                  >
+                    <Eye className="h-3 w-3 text-amber-600 shrink-0" />
+                    <span>Team Lead (Read-Only)</span>
                   </span>
                 </div>
               )}
@@ -404,6 +419,8 @@ export function TopToolbar({
                 className={`h-8 w-8 sm:h-9 sm:w-9 rounded-full flex items-center justify-center font-extrabold text-xs sm:text-sm shadow-xs transition-transform active:scale-95 ${
                   user?.role === "ADMIN"
                     ? "bg-gradient-to-tr from-purple-700 to-indigo-600 text-white border-2 border-purple-200/80"
+                    : user?.role === "VIEWER"
+                    ? "bg-slate-300 text-slate-800 border-2 border-slate-200"
                     : "bg-gradient-to-tr from-amber-600 to-amber-500 text-slate-950 border-2 border-amber-200/80"
                 }`}
               >
@@ -421,6 +438,8 @@ export function TopToolbar({
                     className={`h-10 w-10 rounded-full flex items-center justify-center font-black text-sm shrink-0 shadow-inner ${
                       user?.role === "ADMIN"
                         ? "bg-gradient-to-tr from-purple-700 to-indigo-600 text-white"
+                        : user?.role === "VIEWER"
+                        ? "bg-slate-300 text-slate-800"
                         : "bg-gradient-to-tr from-amber-600 to-amber-500 text-slate-950"
                     }`}
                   >
@@ -438,10 +457,13 @@ export function TopToolbar({
                         className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold tracking-wider uppercase border ${
                           user?.role === "ADMIN"
                             ? "bg-purple-100 text-purple-800 border-purple-200"
+                            : user?.role === "VIEWER"
+                            ? "bg-slate-200 text-slate-800 border-slate-300"
                             : "bg-blue-100 text-blue-800 border-blue-200"
                         }`}
                       >
                         {user?.role === "ADMIN" && <Shield className="h-2.5 w-2.5" />}
+                        {user?.role === "VIEWER" && <Eye className="h-2.5 w-2.5" />}
                         <span>{user?.role || "MEMBER"}</span>
                       </span>
                     </div>
@@ -504,7 +526,19 @@ export function TopToolbar({
       </div>
 
       {/* Formatting & Controls Sub-Toolbar (Desktop only: hidden md:flex) */}
-      <div className="hidden md:flex h-10 px-4 bg-slate-50/80 items-center justify-between text-xs text-slate-600 overflow-x-auto gap-4">
+      {user?.role === "VIEWER" ? (
+        <div className="hidden md:flex h-9 px-4 bg-amber-50/70 items-center justify-between text-xs text-amber-900 border-b border-amber-200/80">
+          <div className="flex items-center gap-2 text-amber-900">
+            <Eye className="h-3.5 w-3.5 text-amber-700 shrink-0" />
+            <span className="font-bold text-amber-950">Team Lead View:</span>
+            <span>You have organization-wide visibility across all team members&apos; sheets. Search, filtering, and exporting are fully enabled. Editing is disabled.</span>
+          </div>
+          <span className="text-[11px] font-bold text-amber-800 bg-amber-100/90 px-2 py-0.5 rounded border border-amber-300 shadow-2xs">
+            Read-Only
+          </span>
+        </div>
+      ) : (
+        <div className="hidden md:flex h-10 px-4 bg-slate-50/80 items-center justify-between text-xs text-slate-600 overflow-x-auto gap-4">
         
         {/* Left: Row & Column Action Buttons */}
         <div className="flex items-center gap-1.5 shrink-0">
@@ -692,8 +726,8 @@ export function TopToolbar({
           </div>
 
         </div>
-
       </div>
+      )}
     </header>
   );
 }

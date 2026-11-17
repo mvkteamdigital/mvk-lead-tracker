@@ -9,7 +9,7 @@ export interface AuthUser {
   id: string;
   email: string;
   name: string;
-  role: "ADMIN" | "MEMBER";
+  role: "ADMIN" | "MEMBER" | "VIEWER";
   status?: string;
   mustChangePassword?: boolean;
 }
@@ -66,8 +66,8 @@ export async function getSessionUser(req?: Request): Promise<AuthUser | null> {
       },
     });
 
-    // If user does not exist or status is REVOKED, immediately invalidate session
-    if (!dbUser || dbUser.status === "REVOKED") {
+    // If user does not exist or status is REVOKED or INACTIVE, immediately invalidate session
+    if (!dbUser || dbUser.status === "REVOKED" || dbUser.status === "INACTIVE") {
       return null;
     }
 
@@ -75,7 +75,7 @@ export async function getSessionUser(req?: Request): Promise<AuthUser | null> {
       id: dbUser.id,
       email: dbUser.email,
       name: dbUser.name,
-      role: dbUser.role as "ADMIN" | "MEMBER",
+      role: dbUser.role as "ADMIN" | "MEMBER" | "VIEWER",
       status: dbUser.status,
       mustChangePassword: dbUser.mustChangePassword,
     };

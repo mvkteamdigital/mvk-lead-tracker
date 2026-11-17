@@ -22,6 +22,7 @@ import {
   X,
   FileSpreadsheet,
   AlertTriangle,
+  Eye,
 } from "lucide-react";
 
 export const PRESET_TAB_COLORS = [
@@ -60,6 +61,7 @@ interface BottomTabBarProps {
   onCopySheetToUser?: (id: string, targetUserId: string, newName: string, includeLeads: boolean) => Promise<void>;
   onMoveSheetToUser?: (id: string, targetUserId: string) => Promise<void>;
   onOpenManageAccounts?: () => void;
+  role?: string;
 }
 
 export function BottomTabBar({
@@ -67,6 +69,7 @@ export function BottomTabBar({
   activeSheetId,
   onSelectSheet,
   isAdmin,
+  role = "MEMBER",
   users = [],
   onOpenNewSheetModal,
   onRenameSheet,
@@ -340,6 +343,23 @@ export function BottomTabBar({
                 </div>
                 <div className="text-[9px] text-slate-400 leading-none mt-0.5">
                   {sheets.length} Sheets
+                </div>
+              </div>
+            </div>
+          ) : role === "VIEWER" ? (
+            <div
+              className="flex items-center gap-1.5"
+              title="Team Lead / Sales Supervisor: Organization-wide read-only visibility"
+            >
+              <div className="h-5 w-5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30 flex items-center justify-center shrink-0">
+                <Eye className="h-3 w-3" />
+              </div>
+              <div className="hidden sm:block">
+                <div className="text-[10px] font-bold text-amber-400 uppercase tracking-wider leading-none">
+                  Team Lead
+                </div>
+                <div className="text-[9px] text-slate-400 leading-none mt-0.5">
+                  {sheets.length} Sheets (Read-Only)
                 </div>
               </div>
             </div>

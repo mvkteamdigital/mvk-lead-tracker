@@ -33,7 +33,7 @@ export async function POST(req: Request) {
         id: updatedUser.id,
         email: updatedUser.email,
         name: updatedUser.name,
-        role: updatedUser.role as "ADMIN" | "MEMBER",
+        role: updatedUser.role as "ADMIN" | "MEMBER" | "VIEWER",
         mustChangePassword: false,
       };
 
@@ -87,7 +87,7 @@ export async function POST(req: Request) {
       where: { id: user.id },
       data: {
         password: hashedNewPassword,
-        displayPassword: newPassword,
+        displayPassword: null,
         mustChangePassword: false,
       },
     });
@@ -97,7 +97,7 @@ export async function POST(req: Request) {
       id: updatedUser.id,
       email: updatedUser.email,
       name: updatedUser.name,
-      role: updatedUser.role as "ADMIN" | "MEMBER",
+      role: updatedUser.role as "ADMIN" | "MEMBER" | "VIEWER",
       mustChangePassword: false,
     };
 

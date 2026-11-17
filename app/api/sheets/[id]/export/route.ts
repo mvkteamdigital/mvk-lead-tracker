@@ -40,7 +40,8 @@ export async function GET(req: Request, { params }: Params) {
       return NextResponse.json({ error: "Sheet not found" }, { status: 404 });
     }
 
-    if (user.role !== "ADMIN" && sheet.userId !== user.id) {
+    // Admin and Viewer (Team Lead) can export any sheet; Member can export their assigned sheet
+    if (user.role !== "ADMIN" && user.role !== "VIEWER" && sheet.userId !== user.id) {
       return NextResponse.json(
         { error: "Access denied" },
         { status: 403 }

@@ -285,10 +285,10 @@ export function SpreadsheetApp() {
     });
   }, [sheets, activeSheet, activeSheetValidLeadCount]);
 
-  // Derived state: Organization-wide total valid lead count across all sheets (Admin only)
+  // Derived state: Organization-wide total valid lead count across all sheets (Admin and Team Lead / Viewer)
   // Reactive: dynamically updates whenever leads are added, edited, deleted, or imported
   const organizationTotalLeads = useMemo(() => {
-    if (user?.role !== "ADMIN") return undefined;
+    if (user?.role !== "ADMIN" && user?.role !== "VIEWER") return undefined;
     return displayedSheets.reduce((sum, s) => sum + (s.rowCount || 0), 0);
   }, [user?.role, displayedSheets]);
 
@@ -732,6 +732,10 @@ export function SpreadsheetApp() {
 
   // 3. Real-time Cell Value Update (Supports any of the 1,000 blank rows)
   const handleUpdateCell = async (rowId: string, columnId: string, value: string, order?: number) => {
+    if (user?.role === "VIEWER") {
+      showToast("Viewers have read-only access to this sheet.", "info");
+      return;
+    }
     const currentSheet = activeSheetRef.current || activeSheet;
     if (!currentSheet) return;
 
@@ -888,6 +892,10 @@ export function SpreadsheetApp() {
 
   // 4. Batch Rows Update (Supports multi-row & multi-column bulk paste from Excel / Google Sheets)
   const handleBatchUpdateRows = async (rows: Partial<RowData>[]) => {
+    if (user?.role === "VIEWER") {
+      showToast("Viewers have read-only access to this sheet.", "info");
+      return;
+    }
     const currentSheet = activeSheetRef.current || activeSheet;
     if (!currentSheet) return;
 
@@ -1186,6 +1194,10 @@ export function SpreadsheetApp() {
 
   // 6. Add Row (at end or inserted at index)
   const handleAddRowAt = async (index?: number) => {
+    if (user?.role === "VIEWER") {
+      showToast("Viewers cannot add rows.", "info");
+      return;
+    }
     if (!activeSheet) return;
 
     pushUndoSnapshot();
@@ -1225,6 +1237,10 @@ export function SpreadsheetApp() {
       deletedOrders?: number[];
     }
   ) => {
+    if (user?.role === "VIEWER") {
+      showToast("Viewers cannot delete rows.", "info");
+      return;
+    }
     const currentSheet = activeSheetRef.current || activeSheet;
     if (!currentSheet) return;
 
@@ -1677,6 +1693,10 @@ export function SpreadsheetApp() {
   };
 
   const handleSaveLeadFromModal = async (data: Record<string, string>, rowId?: string) => {
+    if (user?.role === "VIEWER") {
+      showToast("Viewers have read-only access to leads.", "info");
+      return;
+    }
     const currentSheet = activeSheetRef.current || activeSheet;
     if (!currentSheet) return;
 
@@ -1723,6 +1743,10 @@ export function SpreadsheetApp() {
 
   // 15. Delete lead from modal
   const handleDeleteLeadFromModal = async (rowId: string) => {
+    if (user?.role === "VIEWER") {
+      showToast("Viewers cannot delete leads.", "info");
+      return;
+    }
     await handleDeleteRows([rowId]);
   };
 
@@ -1872,6 +1896,7 @@ export function SpreadsheetApp() {
       {/* 3. Formula Bar (Desktop Only) */}
       <div className="hidden md:block">
         <FormulaBar
+          readOnly={user?.role === "VIEWER"}
           activeCell={activeCell}
           cellValue={getActiveCellValue()}
           onCellValueChange={(val) => {
@@ -1930,6 +1955,7 @@ export function SpreadsheetApp() {
             {/* Mobile View: Vertical Card List with Status & Date Indicators & Tap-to-Edit */}
             <div className="block md:hidden flex-1 overflow-hidden flex flex-col min-h-0">
               <MobileLeadListView
+                isReadOnly={user?.role === "VIEWER"}
                 sheet={currentActiveSheet || activeSheet}
                 searchQuery={searchQuery}
                 onSearchChange={setSearchQuery}
@@ -1956,6 +1982,7 @@ export function SpreadsheetApp() {
                 return (
                   <SpreadsheetGrid
                     key={activeSheet.id}
+                    isReadOnly={user?.role === "VIEWER"}
                     sheet={activeSheet}
                     onUpdateCell={handleUpdateCell}
                     onBatchUpdateRows={handleBatchUpdateRows}
@@ -2004,6 +2031,7 @@ export function SpreadsheetApp() {
           setActiveSheetId(id);
         }}
         isAdmin={user?.role === "ADMIN"}
+        role={user?.role}
         users={usersList}
         onOpenNewSheetModal={() => setIsNewSheetModalOpen(true)}
         onRenameSheet={handleRenameSheet}
@@ -2045,6 +2073,7 @@ export function SpreadsheetApp() {
       {activeSheet && (
         <LeadFormModal
           isOpen={isLeadFormModalOpen}
+          isReadOnly={user?.role === "VIEWER"}
           onClose={() => {
             setIsLeadFormModalOpen(false);
             setEditingLeadForModal(null);

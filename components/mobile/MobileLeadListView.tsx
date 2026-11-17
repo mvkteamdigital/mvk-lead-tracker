@@ -44,6 +44,7 @@ interface MobileLeadCardProps {
   onEditLead: (row: RowData) => void;
   onUpdateCell?: (rowId: string, columnId: string, value: string, order?: number) => Promise<void>;
   onUpdateLead?: (rowId: string, data: Record<string, string>, order?: number) => Promise<void>;
+  isReadOnly?: boolean;
 }
 
 const MobileLeadCard = ({
@@ -52,6 +53,7 @@ const MobileLeadCard = ({
   onEditLead,
   onUpdateCell,
   onUpdateLead,
+  isReadOnly = false,
 }: MobileLeadCardProps) => {
   const nameCol = columns.find((c) => c.id === "col_name") || columns[4];
   const numberCol = columns.find((c) => c.id === "col_number") || columns[5];
@@ -156,10 +158,10 @@ const MobileLeadCard = ({
                 <span className="truncate max-w-[95px] sm:max-w-[130px]">
                   {isUnattended || currentStatus === "Unassigned" ? "Unattended" : currentStatus}
                 </span>
-                <ChevronDown className="h-2.5 w-2.5 opacity-60 shrink-0" />
+                {!isReadOnly && <ChevronDown className="h-2.5 w-2.5 opacity-60 shrink-0" />}
               </span>
 
-              {onUpdateCell && (
+              {!isReadOnly && onUpdateCell && (
                 <select
                   value={!isUnattended && currentStatus !== "Unassigned" ? currentStatus : ""}
                   onChange={async (e) => {
@@ -281,6 +283,7 @@ const MemoizedMobileLeadCard = React.memo(
     if (prev.onUpdateCell !== next.onUpdateCell) return false;
     if (prev.onUpdateLead !== next.onUpdateLead) return false;
     if (prev.onEditLead !== next.onEditLead) return false;
+    if (prev.isReadOnly !== next.isReadOnly) return false;
     return true;
   }
 );
@@ -296,6 +299,7 @@ interface MobileLeadListViewProps {
   onAddNewLead: () => void;
   onUpdateCell?: (rowId: string, columnId: string, value: string, order?: number) => Promise<void>;
   onUpdateLead?: (rowId: string, data: Record<string, string>, order?: number) => Promise<void>;
+  isReadOnly?: boolean;
 }
 
 export function MobileLeadListView({
@@ -309,6 +313,7 @@ export function MobileLeadListView({
   onAddNewLead,
   onUpdateCell,
   onUpdateLead,
+  isReadOnly = false,
 }: MobileLeadListViewProps) {
   // Filter only rows that have actual valid lead data (name, number, project, or other non-empty field)
   // in their strict sequential row order as returned from the database
@@ -408,7 +413,7 @@ export function MobileLeadListView({
                 ? "Try selecting a different status option."
                 : 'Tap the "➕ Add Lead" button below to record your first client in this sheet.'}
             </p>
-            {!searchQuery && (
+            {!isReadOnly && !searchQuery && (
               <button
                 onClick={onAddNewLead}
                 className="mt-4 px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
@@ -427,21 +432,24 @@ export function MobileLeadListView({
               onEditLead={onEditLead}
               onUpdateCell={onUpdateCell}
               onUpdateLead={onUpdateLead}
+              isReadOnly={isReadOnly}
             />
           ))
         )}
       </div>
 
       {/* Floating Action Button (FAB) for Mobile View: ➕ Add Lead (Floats cleanly above compact bottom tab bar) */}
-      <button
-        onClick={onAddNewLead}
-        className="fixed bottom-16 right-4 sm:right-6 z-40 bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold px-4 py-3 rounded-full shadow-2xl border-2 border-amber-400/60 flex items-center gap-2 transition-all cursor-pointer group"
-      >
-        <div className="h-5 w-5 rounded-full bg-amber-400 text-slate-950 flex items-center justify-center font-extrabold text-xs">
-          +
-        </div>
-        <span className="text-xs tracking-wide text-amber-300 font-bold">Add Lead</span>
-      </button>
+      {!isReadOnly && (
+        <button
+          onClick={onAddNewLead}
+          className="fixed bottom-16 right-4 sm:right-6 z-40 bg-slate-900 hover:bg-slate-800 active:scale-95 text-white font-bold px-4 py-3 rounded-full shadow-2xl border-2 border-amber-400/60 flex items-center gap-2 transition-all cursor-pointer group"
+        >
+          <div className="h-5 w-5 rounded-full bg-amber-400 text-slate-950 flex items-center justify-center font-extrabold text-xs">
+            +
+          </div>
+          <span className="text-xs tracking-wide text-amber-300 font-bold">Add Lead</span>
+        </button>
+      )}
     </div>
   );
 }

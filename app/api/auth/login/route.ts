@@ -34,8 +34,8 @@ export async function POST(req: Request) {
       );
     }
 
-    // Check if account access has been revoked by admin
-    if (user.status === "REVOKED") {
+    // Check if account access has been revoked or inactive
+    if (user.status === "REVOKED" || user.status === "INACTIVE") {
       return NextResponse.json(
         { error: "Access Denied: Your account access has been revoked by an administrator." },
         { status: 403 }
@@ -46,7 +46,7 @@ export async function POST(req: Request) {
       id: user.id,
       email: user.email,
       name: user.name,
-      role: user.role as "ADMIN" | "MEMBER",
+      role: user.role as "ADMIN" | "MEMBER" | "VIEWER",
       mustChangePassword: user.mustChangePassword,
     };
 

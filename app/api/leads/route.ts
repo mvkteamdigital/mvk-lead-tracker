@@ -93,9 +93,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ exists: false });
   }
 
-  // If no phone check query, return accessible leads in default order
+  // If no phone check query, return accessible leads in default order (ADMIN and VIEWER see all leads)
   const leads = await prisma.row.findMany({
-    where: user.role === "ADMIN" ? {} : { sheet: { userId: user.id } },
+    where: user.role === "ADMIN" || user.role === "VIEWER" ? {} : { sheet: { userId: user.id } },
     orderBy: [
       { order: "asc" },
       { createdAt: "asc" },
@@ -129,6 +129,13 @@ export async function POST(req: Request) {
   const user = await getSessionUser(req);
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (user.role === "VIEWER") {
+    return NextResponse.json(
+      { error: "Forbidden: Viewers have read-only permissions." },
+      { status: 403 }
+    );
   }
 
   try {
@@ -275,6 +282,13 @@ async function handleUpdateLead(req: Request) {
   const user = await getSessionUser(req);
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (user.role === "VIEWER") {
+    return NextResponse.json(
+      { error: "Forbidden: Viewers have read-only permissions." },
+      { status: 403 }
+    );
   }
 
   try {

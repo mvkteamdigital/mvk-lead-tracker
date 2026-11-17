@@ -98,7 +98,8 @@ export async function GET(req: Request, { params }: Params) {
       return NextResponse.json({ error: "Lead not found" }, { status: 404 });
     }
 
-    if (user.role !== "ADMIN" && row.sheet.userId !== user.id) {
+    // Authorization check: Admin and Viewer (Team Lead) can view any lead; Member can only view their own
+    if (user.role !== "ADMIN" && user.role !== "VIEWER" && row.sheet.userId !== user.id) {
       return NextResponse.json({ error: "Forbidden: Access denied" }, { status: 403 });
     }
 
@@ -123,6 +124,13 @@ async function updateLeadById(req: Request, id: string) {
   const user = await getSessionUser(req);
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (user.role === "VIEWER") {
+    return NextResponse.json(
+      { error: "Forbidden: Viewers have read-only permissions." },
+      { status: 403 }
+    );
   }
 
   try {

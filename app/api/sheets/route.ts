@@ -13,8 +13,8 @@ export async function GET() {
 
   try {
     let sheets;
-    if (user.role === "ADMIN") {
-      // Admins see all sheets
+    if (user.role === "ADMIN" || user.role === "VIEWER") {
+      // Admins and Viewers (Team Lead / Sales Supervisor) see all sheets across the organization
       sheets = await prisma.sheet.findMany({
         orderBy: { order: "asc" },
         include: {
@@ -57,7 +57,7 @@ export async function GET() {
     });
 
     let totalOrganizationLeads: number | undefined;
-    if (user.role === "ADMIN") {
+    if (user.role === "ADMIN" || user.role === "VIEWER") {
       totalOrganizationLeads = formatted.reduce((sum, s) => sum + s.rowCount, 0);
     }
 

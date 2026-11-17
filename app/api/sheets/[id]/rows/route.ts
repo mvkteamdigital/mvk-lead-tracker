@@ -82,6 +82,9 @@ async function checkSheetAccess(sheetId: string, userId: string, role: string) {
   });
 
   if (!sheet) return { status: 404, error: "Sheet not found" };
+  if (role === "VIEWER") {
+    return { status: 403, error: "Access denied. Viewers have read-only permissions." };
+  }
   if (role !== "ADMIN" && sheet.userId !== userId) {
     return { status: 403, error: "Access denied. You do not have permission to modify this sheet." };
   }

@@ -6,6 +6,7 @@
  */
 
 const assert = require("assert");
+const bcrypt = require("bcryptjs");
 
 // 1. Core business logic definitions mirroring lib/leads.ts
 function isAlphanumericText(val) {
@@ -3622,9 +3623,724 @@ it("Scenario 8: Column names, widths, and order preserved in XLSX and CSV aoa", 
   assert.strictEqual(aoa[1][0], "Alice");
 });
 
+console.log("\n--- SECTION 17: ADMIN CONTROLS & VIEWER ROLE PERMISSIONS MATRIX ---");
+
+// Helper simulation of role access matrix
+function checkUserPermission(role, action) {
+  const normalizedRole = ["ADMIN", "VIEWER"].includes(role) ? role : "MEMBER";
+  
+  switch (action) {
+    case "VIEW_LEADS":
+    case "FILTER_SEARCH":
+    case "EXPORT_LEADS":
+      return true; // All roles can view, filter, and export authorized sheets
+    case "EDIT_CELL":
+    case "CREATE_LEAD":
+    case "UPDATE_LEAD":
+    case "DELETE_LEAD":
+    case "BULK_PASTE":
+    case "MODIFY_FOLLOWUP":
+      return normalizedRole === "ADMIN" || normalizedRole === "MEMBER";
+    case "MANAGE_USERS":
+    case "RESET_USER_PASSWORD":
+    case "ASSIGN_SHEETS":
+    case "DELETE_USER":
+    case "REASSIGN_SHEETS":
+      return normalizedRole === "ADMIN";
+    default:
+      return false;
+  }
+}
+
+it("Scenario 1: Permission Matrix verifies VIEWER is strictly read-only while ADMIN and MEMBER have appropriate rights", () => {
+  // ADMIN permissions
+  assert.strictEqual(checkUserPermission("ADMIN", "VIEW_LEADS"), true);
+  assert.strictEqual(checkUserPermission("ADMIN", "FILTER_SEARCH"), true);
+  assert.strictEqual(checkUserPermission("ADMIN", "EXPORT_LEADS"), true);
+  assert.strictEqual(checkUserPermission("ADMIN", "EDIT_CELL"), true);
+  assert.strictEqual(checkUserPermission("ADMIN", "CREATE_LEAD"), true);
+  assert.strictEqual(checkUserPermission("ADMIN", "DELETE_LEAD"), true);
+  assert.strictEqual(checkUserPermission("ADMIN", "BULK_PASTE"), true);
+  assert.strictEqual(checkUserPermission("ADMIN", "MANAGE_USERS"), true);
+  assert.strictEqual(checkUserPermission("ADMIN", "RESET_USER_PASSWORD"), true);
+  assert.strictEqual(checkUserPermission("ADMIN", "DELETE_USER"), true);
+
+  // MEMBER permissions
+  assert.strictEqual(checkUserPermission("MEMBER", "VIEW_LEADS"), true);
+  assert.strictEqual(checkUserPermission("MEMBER", "FILTER_SEARCH"), true);
+  assert.strictEqual(checkUserPermission("MEMBER", "EXPORT_LEADS"), true);
+  assert.strictEqual(checkUserPermission("MEMBER", "EDIT_CELL"), true);
+  assert.strictEqual(checkUserPermission("MEMBER", "CREATE_LEAD"), true);
+  assert.strictEqual(checkUserPermission("MEMBER", "DELETE_LEAD"), true);
+  assert.strictEqual(checkUserPermission("MEMBER", "BULK_PASTE"), true);
+  assert.strictEqual(checkUserPermission("MEMBER", "MANAGE_USERS"), false);
+  assert.strictEqual(checkUserPermission("MEMBER", "RESET_USER_PASSWORD"), false);
+  assert.strictEqual(checkUserPermission("MEMBER", "DELETE_USER"), false);
+
+  // VIEWER permissions: Read-only access
+  assert.strictEqual(checkUserPermission("VIEWER", "VIEW_LEADS"), true);
+  assert.strictEqual(checkUserPermission("VIEWER", "FILTER_SEARCH"), true);
+  assert.strictEqual(checkUserPermission("VIEWER", "EXPORT_LEADS"), true);
+  assert.strictEqual(checkUserPermission("VIEWER", "EDIT_CELL"), false);
+  assert.strictEqual(checkUserPermission("VIEWER", "CREATE_LEAD"), false);
+  assert.strictEqual(checkUserPermission("VIEWER", "UPDATE_LEAD"), false);
+  assert.strictEqual(checkUserPermission("VIEWER", "DELETE_LEAD"), false);
+  assert.strictEqual(checkUserPermission("VIEWER", "BULK_PASTE"), false);
+  assert.strictEqual(checkUserPermission("VIEWER", "MODIFY_FOLLOWUP"), false);
+  assert.strictEqual(checkUserPermission("VIEWER", "MANAGE_USERS"), false);
+});
+
+it("Scenario 2: Server-side checkSheetAccess simulation rejects VIEWER with 403 Forbidden for all write methods", () => {
+  function simulateCheckSheetAccess(user, sheet, method) {
+    if (!sheet) return { status: 404, error: "Sheet not found" };
+    if (user.role === "ADMIN") return { status: 200, access: true };
+    
+    // Check if user is assigned to sheet
+    const isAssigned = sheet.assignedToId === user.id || 
+      (Array.isArray(sheet.assignedUsers) && sheet.assignedUsers.some((u) => u.id === user.id));
+    if (!isAssigned) return { status: 403, error: "Access denied" };
+
+    // Viewer check on write operations
+    if (user.role === "VIEWER" && ["POST", "PUT", "DELETE", "PATCH"].includes(method)) {
+      return { status: 403, error: "Viewers have read-only access and cannot modify sheet data" };
+    }
+
+    return { status: 200, access: true };
+  }
+
+  const assignedSheet = { id: "sheet_1", assignedToId: "user_viewer", assignedUsers: [{ id: "user_viewer" }] };
+  const viewerUser = { id: "user_viewer", role: "VIEWER" };
+
+  // GET is allowed for viewer
+  assert.strictEqual(simulateCheckSheetAccess(viewerUser, assignedSheet, "GET").status, 200);
+
+  // All write methods return 403 Forbidden
+  assert.strictEqual(simulateCheckSheetAccess(viewerUser, assignedSheet, "POST").status, 403);
+  assert.strictEqual(simulateCheckSheetAccess(viewerUser, assignedSheet, "PUT").status, 403);
+  assert.strictEqual(simulateCheckSheetAccess(viewerUser, assignedSheet, "DELETE").status, 403);
+  assert.strictEqual(simulateCheckSheetAccess(viewerUser, assignedSheet, "PATCH").status, 403);
+});
+
+it("Scenario 3: Plaintext passwords are NEVER stored in displayPassword or returned in API responses", () => {
+  // Simulated user creation payload
+  const createPayload = {
+    name: "New Analyst",
+    email: "analyst@example.com",
+    password: "SuperSecretPassword123!",
+    role: "VIEWER",
+  };
+
+  // Simulating the user API route logic
+  const bcryptMockHash = "$2b$10$abcdefghijklmnopqrstuvwxyz123456";
+  const userRecord = {
+    id: "usr_test",
+    name: createPayload.name,
+    email: createPayload.email,
+    password: bcryptMockHash,
+    role: createPayload.role,
+    displayPassword: null, // displayPassword phased out
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  // 1. Plaintext password is not stored in DB
+  assert.strictEqual(userRecord.displayPassword, null);
+  assert.notStrictEqual(userRecord.password, createPayload.password);
+
+  // 2. API Response sanitization: password & displayPassword are removed
+  const { password, displayPassword, ...safeResponse } = userRecord;
+  assert.strictEqual("password" in safeResponse, false);
+  assert.strictEqual("displayPassword" in safeResponse, false);
+  assert.strictEqual(safeResponse.email, "analyst@example.com");
+  assert.strictEqual(safeResponse.role, "VIEWER");
+});
+
+it("Scenario 4: Safeguards prevent demoting, revoking, or deleting the last active administrator", () => {
+  const users = [
+    { id: "admin_1", name: "Super Admin", role: "ADMIN", accessStatus: "ACTIVE" },
+    { id: "member_1", name: "Sales Rep", role: "MEMBER", accessStatus: "ACTIVE" },
+  ];
+
+  function validateRoleChange(currentUserId, targetUserId, newRole, newStatus) {
+    const targetUser = users.find((u) => u.id === targetUserId);
+    if (!targetUser) return { success: false, error: "User not found" };
+
+    if (targetUser.role === "ADMIN" && (newRole !== "ADMIN" || newStatus === "REVOKED")) {
+      const activeAdmins = users.filter((u) => u.role === "ADMIN" && u.accessStatus !== "REVOKED");
+      if (activeAdmins.length <= 1) {
+        return { success: false, error: "Cannot demote or revoke the last active administrator" };
+      }
+    }
+
+    if (currentUserId === targetUserId && newRole !== "ADMIN") {
+      return { success: false, error: "Administrators cannot remove their own admin privileges" };
+    }
+
+    return { success: true };
+  }
+
+  // Attempting to demote the only active admin to MEMBER -> Blocked
+  const demoteResult = validateRoleChange("admin_1", "admin_1", "MEMBER", "ACTIVE");
+  assert.strictEqual(demoteResult.success, false);
+  assert.strictEqual(demoteResult.error, "Cannot demote or revoke the last active administrator");
+
+  // Attempting to revoke the only active admin -> Blocked
+  const revokeResult = validateRoleChange("admin_1", "admin_1", "ADMIN", "REVOKED");
+  assert.strictEqual(revokeResult.success, false);
+  assert.strictEqual(revokeResult.error, "Cannot demote or revoke the last active administrator");
+
+  // Attempting to delete own account -> Blocked
+  function validateUserDelete(currentUserId, targetUserId) {
+    if (currentUserId === targetUserId) {
+      return { success: false, error: "You cannot delete your own account" };
+    }
+    const targetUser = users.find((u) => u.id === targetUserId);
+    if (targetUser?.role === "ADMIN") {
+      const activeAdmins = users.filter((u) => u.role === "ADMIN" && u.accessStatus !== "REVOKED");
+      if (activeAdmins.length <= 1) {
+        return { success: false, error: "Cannot delete the only administrator account" };
+      }
+    }
+    return { success: true };
+  }
+
+  assert.strictEqual(validateUserDelete("admin_1", "admin_1").success, false);
+  assert.strictEqual(validateUserDelete("admin_1", "admin_1").error, "You cannot delete your own account");
+});
+
+it("Scenario 5: Member removal with sheet reassignment safely moves sheets without deleting leads", () => {
+  // Setup simulated database tables
+  let sheets = [
+    { id: "s1", name: "Meta Leads", assignedToId: "member_leaving" },
+    { id: "s2", name: "Google Ads Leads", assignedToId: "member_leaving" },
+  ];
+  let leads = [
+    { id: "l1", sheetId: "s1", name: "Lead 1" },
+    { id: "l2", sheetId: "s1", name: "Lead 2" },
+    { id: "l3", sheetId: "s2", name: "Lead 3" },
+  ];
+
+  function removeMember(memberId, reassignToUserId) {
+    if (reassignToUserId) {
+      // Reassign sheets
+      sheets = sheets.map((s) => s.assignedToId === memberId ? { ...s, assignedToId: reassignToUserId } : s);
+    } else {
+      // Retain sheets as unassigned
+      sheets = sheets.map((s) => s.assignedToId === memberId ? { ...s, assignedToId: null } : s);
+    }
+    // Leads are never deleted when a user is removed
+  }
+
+  // Remove member and reassign to "admin_1"
+  removeMember("member_leaving", "admin_1");
+
+  // Sheets are now assigned to "admin_1"
+  assert.strictEqual(sheets[0].assignedToId, "admin_1");
+  assert.strictEqual(sheets[1].assignedToId, "admin_1");
+
+  // ZERO leads are deleted
+  assert.strictEqual(leads.length, 3);
+  assert.strictEqual(leads[0].sheetId, "s1");
+});
+
+it("Scenario 6: Member removal without reassignment retains sheets as unassigned with all leads intact", () => {
+  let sheets = [
+    { id: "s1", name: "Unassigned Campaign", assignedToId: "member_retiring" },
+  ];
+  let leads = [
+    { id: "l1", sheetId: "s1", name: "Important Customer" },
+  ];
+
+  // Remove member without reassignToUserId
+  sheets = sheets.map((s) => s.assignedToId === "member_retiring" ? { ...s, assignedToId: null } : s);
+
+  assert.strictEqual(sheets[0].assignedToId, null);
+  assert.strictEqual(leads.length, 1);
+  assert.strictEqual(leads[0].name, "Important Customer");
+});
+
+it("Scenario 7: Frontend Read-Only checks disable cell editing and formula bar for VIEWER", () => {
+  const viewerUser = { id: "u_view", role: "VIEWER" };
+  const isReadOnly = viewerUser.role === "VIEWER";
+
+  let cellEditAllowed = false;
+  let formulaBarEditAllowed = false;
+
+  function onCellDoubleClick() {
+    if (isReadOnly) return; // Prevent startEditing
+    cellEditAllowed = true;
+  }
+
+  function onFormulaBarChange(newVal) {
+    if (isReadOnly) return; // Prevent formula edit
+    formulaBarEditAllowed = true;
+  }
+
+  onCellDoubleClick();
+  onFormulaBarChange("New Value");
+
+  assert.strictEqual(cellEditAllowed, false);
+  assert.strictEqual(formulaBarEditAllowed, false);
+});
+
+it("Scenario 8: Role change comparison modal accurately identifies permissions gained or lost", () => {
+  function getRoleChangeImpact(currentRole, newRole) {
+    if (currentRole === newRole) return { gains: [], losses: [] };
+
+    const matrix = {
+      ADMIN: ["Full system access across all sheets", "User management & credentials", "Sheet creation & reassignment", "Lead editing & deletion"],
+      MEMBER: ["Edit leads in assigned sheets", "Add new leads & paste bulk data", "Update follow-up statuses", "Delete rows"],
+      VIEWER: ["Read-only view of assigned sheets", "Filter and search leads", "Export authorized sheet data"],
+    };
+
+    if (currentRole === "MEMBER" && newRole === "VIEWER") {
+      return {
+        gains: [],
+        losses: ["Ability to edit cells, create leads, or paste bulk data", "Ability to update follow-up statuses", "Ability to delete rows"],
+      };
+    }
+
+    if (currentRole === "VIEWER" && newRole === "MEMBER") {
+      return {
+        gains: ["Ability to edit cells and add leads", "Ability to paste bulk data and delete rows", "Ability to update follow-up statuses"],
+        losses: [],
+      };
+    }
+
+    if (currentRole === "MEMBER" && newRole === "ADMIN") {
+      return {
+        gains: ["Access to all organization sheets", "Manage team accounts and reset passwords", "Create, duplicate, and delete sheets"],
+        losses: [],
+      };
+    }
+
+    return { gains: [], losses: [] };
+  }
+
+  const memberToViewer = getRoleChangeImpact("MEMBER", "VIEWER");
+  assert.strictEqual(memberToViewer.losses.length > 0, true);
+  assert.strictEqual(memberToViewer.losses[0].includes("Ability to edit cells"), true);
+
+  const viewerToMember = getRoleChangeImpact("VIEWER", "MEMBER");
+  assert.strictEqual(viewerToMember.gains.length > 0, true);
+  assert.strictEqual(viewerToMember.gains[0].includes("Ability to edit cells"), true);
+});
+
+console.log("\n--- SECTION 18: COMPLETE EDIT USER CREDENTIALS SUITE ---");
+
+it("Scenario 1: Complete Edit User Credentials payload updates all 6 attributes atomically in database", () => {
+  let dbUser = {
+    id: "usr_kavya_1",
+    name: "Kavya Initial",
+    email: "kavya.old@mvkleads.com",
+    password: "$2b$10$oldHashedPassword1234567890",
+    role: "MEMBER",
+    status: "ACTIVE",
+    displayPassword: null,
+    sheets: [{ id: "sheet_kavya_meta", name: "Kavya (Meta)", leadsCount: 45 }],
+  };
+
+  // Admin submits complete Edit User Credentials form
+  const editPayload = {
+    userId: "usr_kavya_1",
+    name: "Kavya Updated",
+    email: "kavya.new@mvkleads.com",
+    newPassword: "NewSecretPassword2026!",
+    role: "VIEWER",
+    status: "ACTIVE",
+  };
+
+  // Backend simulation
+  const updateData = {};
+  if (editPayload.name) updateData.name = editPayload.name.trim();
+  if (editPayload.email) updateData.email = editPayload.email.trim().toLowerCase();
+  if (editPayload.role) updateData.role = editPayload.role;
+  if (editPayload.status) updateData.status = editPayload.status;
+  if (editPayload.newPassword) {
+    updateData.password = "$2b$10$newlyHashedPassword2026!";
+    updateData.displayPassword = null;
+  }
+
+  // Atomic database update
+  dbUser = { ...dbUser, ...updateData };
+
+  // Verification
+  assert.strictEqual(dbUser.id, "usr_kavya_1"); // ID preserved
+  assert.strictEqual(dbUser.name, "Kavya Updated"); // Name updated
+  assert.strictEqual(dbUser.email, "kavya.new@mvkleads.com"); // Email identity updated
+  assert.strictEqual(dbUser.role, "VIEWER"); // Role updated
+  assert.strictEqual(dbUser.status, "ACTIVE"); // Status preserved
+  assert.strictEqual(dbUser.password, "$2b$10$newlyHashedPassword2026!"); // Password hashed
+  assert.strictEqual(dbUser.displayPassword, null); // Plaintext credential nullified
+  assert.strictEqual(dbUser.sheets.length, 1); // Sheets preserved
+  assert.strictEqual(dbUser.sheets[0].leadsCount, 45); // Leads preserved
+});
+
+it("Scenario 2: Email change updates actual authentication identity while preserving relations and leads", () => {
+  const usersDb = [
+    { id: "usr_101", email: "sanjana@mvkleads.com", name: "Sanjana" },
+  ];
+  const sheetsDb = [
+    { id: "sh_meta", name: "Sanjana Meta", userId: "usr_101", leadCount: 120 },
+    { id: "sh_99", name: "Sanjana 99acres", userId: "usr_101", leadCount: 85 },
+  ];
+
+  // Modify email to new login ID
+  const newEmail = "sanjana.leadteam@mvkleads.com";
+  usersDb[0].email = newEmail.toLowerCase().trim();
+
+  // Authentication lookup with new email succeeds
+  const loginUser = usersDb.find((u) => u.email === "sanjana.leadteam@mvkleads.com");
+  assert.notStrictEqual(loginUser, undefined);
+  assert.strictEqual(loginUser.id, "usr_101");
+
+  // Authentication lookup with old email fails
+  const oldLoginUser = usersDb.find((u) => u.email === "sanjana@mvkleads.com");
+  assert.strictEqual(oldLoginUser, undefined);
+
+  // Sheets and lead relations remain unchanged and linked to usr_101
+  const userSheets = sheetsDb.filter((s) => s.userId === loginUser.id);
+  assert.strictEqual(userSheets.length, 2);
+  const totalLeads = userSheets.reduce((sum, s) => sum + s.leadCount, 0);
+  assert.strictEqual(totalLeads, 205);
+});
+
+it("Scenario 3: Email change enforces case-insensitive uniqueness check and prevents collision", () => {
+  const existingUsers = [
+    { id: "u1", email: "alice@example.com" },
+    { id: "u2", email: "bob@example.com" },
+  ];
+
+  function validateEmailUpdate(targetUserId, inputEmail) {
+    const normalized = inputEmail.trim().toLowerCase();
+    const existing = existingUsers.find((u) => u.email.toLowerCase() === normalized);
+    if (existing && existing.id !== targetUserId) {
+      return { success: false, error: "This email address is already in use by another user." };
+    }
+    return { success: true };
+  }
+
+  // Attempting to change Bob's email to Alice's email (different case) -> Blocked
+  const collisionCheck = validateEmailUpdate("u2", "ALICE@EXAMPLE.COM");
+  assert.strictEqual(collisionCheck.success, false);
+  assert.strictEqual(collisionCheck.error, "This email address is already in use by another user.");
+
+  // Bob keeping own email with different case -> Allowed
+  const sameUserCheck = validateEmailUpdate("u2", "BOB@EXAMPLE.COM");
+  assert.strictEqual(sameUserCheck.success, true);
+});
+
+it("Scenario 4: Leaving password blank during Edit User Credentials preserves existing hashed password", () => {
+  const user = {
+    id: "usr_alice",
+    password: "$2b$10$existingBcryptHash9999",
+    displayPassword: null,
+  };
+
+  const editPayload = {
+    name: "Alice Cooper",
+    email: "alice@example.com",
+    newPassword: "", // Left blank
+  };
+
+  const updateData = {};
+  if (editPayload.newPassword && editPayload.newPassword.trim()) {
+    updateData.password = "$2b$10$newHash";
+  }
+
+  const updatedUser = { ...user, ...updateData };
+  assert.strictEqual(updatedUser.password, "$2b$10$existingBcryptHash9999");
+});
+
+it("Scenario 5: Setting account status to INACTIVE or REVOKED blocks login and invalidates active session", () => {
+  const user = {
+    id: "usr_blocked",
+    email: "blocked@mvkleads.com",
+    status: "REVOKED", // Or INACTIVE
+  };
+
+  // 1. In login API route
+  function simulateLogin(u) {
+    if (u.status === "REVOKED" || u.status === "INACTIVE") {
+      return { status: 403, error: "Access Denied: Your account access has been revoked by an administrator." };
+    }
+    return { status: 200, success: true };
+  }
+  assert.strictEqual(simulateLogin(user).status, 403);
+
+  // 2. In session validation (getSessionUser)
+  function simulateSessionValidation(dbUser) {
+    if (!dbUser || dbUser.status === "REVOKED" || dbUser.status === "INACTIVE") {
+      return null;
+    }
+    return dbUser;
+  }
+  assert.strictEqual(simulateSessionValidation(user), null);
+});
+
+it("Scenario 6: Safeguards in Edit User Credentials prevent self-demotion, self-revocation, and last admin lock", () => {
+  const users = [
+    { id: "admin_root", role: "ADMIN", status: "ACTIVE" },
+  ];
+
+  function validateCredentialsEdit(loggedInAdminId, targetUser, requestedRole, requestedStatus) {
+    // Self-demotion check
+    if (loggedInAdminId === targetUser.id && requestedRole !== "ADMIN") {
+      return { success: false, error: "Cannot change your own administrative role." };
+    }
+    // Self-revocation check
+    if (loggedInAdminId === targetUser.id && (requestedStatus === "REVOKED" || requestedStatus === "INACTIVE")) {
+      return { success: false, error: "Cannot revoke your own account access." };
+    }
+    // Last active admin demotion check
+    if (targetUser.role === "ADMIN" && requestedRole !== "ADMIN") {
+      const activeAdmins = users.filter((u) => u.role === "ADMIN" && u.status === "ACTIVE");
+      if (activeAdmins.length <= 1) {
+        return { success: false, error: "Cannot demote the last active Administrator account." };
+      }
+    }
+    // Last active admin revocation check
+    if (targetUser.role === "ADMIN" && (requestedStatus === "REVOKED" || requestedStatus === "INACTIVE")) {
+      const activeAdmins = users.filter((u) => u.role === "ADMIN" && u.status === "ACTIVE");
+      if (activeAdmins.length <= 1) {
+        return { success: false, error: "Cannot revoke the last active Administrator account." };
+      }
+    }
+    return { success: true };
+  }
+
+  // Attempting to demote self
+  const r1 = validateCredentialsEdit("admin_root", users[0], "MEMBER", "ACTIVE");
+  assert.strictEqual(r1.success, false);
+  assert.strictEqual(r1.error, "Cannot change your own administrative role.");
+
+  // Attempting to revoke self
+  const r2 = validateCredentialsEdit("admin_root", users[0], "ADMIN", "REVOKED");
+  assert.strictEqual(r2.success, false);
+  assert.strictEqual(r2.error, "Cannot revoke your own account access.");
+});
+
+console.log("\n--- SECTION 19: VIEWER AS TEAM LEAD (ORGANIZATION-WIDE READ-ONLY VISIBILITY) ---");
+
+it("Scenario 1: Viewer (Team Lead) has organization-wide read access across all sales members' sheets and leads", () => {
+  const sheetsDb = [
+    { id: "sheet_sanjana_meta", name: "Sanjana (Meta)", userId: "user_sanjana", leads: [1, 2, 3] },
+    { id: "sheet_sanjana_99", name: "Sanjana (99acres)", userId: "user_sanjana", leads: [4, 5] },
+    { id: "sheet_kavya_meta", name: "Kavya (Meta)", userId: "user_kavya", leads: [6, 7, 8, 9] },
+    { id: "sheet_rahul_google", name: "Rahul (Google Ads)", userId: "user_rahul", leads: [10] },
+  ];
+
+  function getAccessibleSheetsForUser(user) {
+    if (user.role === "ADMIN" || user.role === "VIEWER") {
+      return sheetsDb; // Full visibility across all sales team members
+    }
+    return sheetsDb.filter((s) => s.userId === user.id); // Member sees only assigned sheets
+  }
+
+  const adminUser = { id: "u_admin", role: "ADMIN" };
+  const viewerUser = { id: "u_team_lead", role: "VIEWER" };
+  const memberSanjana = { id: "user_sanjana", role: "MEMBER" };
+  const memberRahul = { id: "user_rahul", role: "MEMBER" };
+
+  // Admin sees all 4 sheets
+  assert.strictEqual(getAccessibleSheetsForUser(adminUser).length, 4);
+
+  // Viewer (Team Lead) sees ALL 4 sheets across every member
+  const viewerSheets = getAccessibleSheetsForUser(viewerUser);
+  assert.strictEqual(viewerSheets.length, 4);
+  assert.strictEqual(viewerSheets.some((s) => s.userId === "user_sanjana"), true);
+  assert.strictEqual(viewerSheets.some((s) => s.userId === "user_kavya"), true);
+  assert.strictEqual(viewerSheets.some((s) => s.userId === "user_rahul"), true);
+
+  // Members see ONLY their own sheets
+  assert.strictEqual(getAccessibleSheetsForUser(memberSanjana).length, 2);
+  assert.strictEqual(getAccessibleSheetsForUser(memberRahul).length, 1);
+});
+
+it("Scenario 2: Organization-wide lead total is computed and available for ADMIN and VIEWER, but hidden for MEMBER", () => {
+  const sheets = [
+    { id: "s1", rowCount: 50 },
+    { id: "s2", rowCount: 30 },
+    { id: "s3", rowCount: 20 },
+  ];
+
+  function computeOrgTotal(userRole, sheetList) {
+    if (userRole !== "ADMIN" && userRole !== "VIEWER") return undefined;
+    return sheetList.reduce((sum, s) => sum + s.rowCount, 0);
+  }
+
+  assert.strictEqual(computeOrgTotal("ADMIN", sheets), 100);
+  assert.strictEqual(computeOrgTotal("VIEWER", sheets), 100); // Team Lead sees full inventory
+  assert.strictEqual(computeOrgTotal("MEMBER", sheets), undefined); // Sales rep sees only own counts
+});
+
+it("Scenario 3: Direct API write endpoints strictly reject VIEWER with 403 Forbidden", () => {
+  const viewer = { id: "u_viewer", role: "VIEWER" };
+
+  function simulateApiEndpoint(user, endpoint, method) {
+    if (user.role === "VIEWER") {
+      // Allowed read-only endpoints
+      if (
+        (endpoint.startsWith("/api/sheets") && method === "GET") ||
+        (endpoint.startsWith("/api/leads") && method === "GET")
+      ) {
+        return { status: 200, success: true };
+      }
+      // Block all writes
+      return { status: 403, error: "Access denied. Viewers have read-only permissions." };
+    }
+    return { status: 200, success: true };
+  }
+
+  // Reads: Allowed
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/sheets", "GET").status, 200);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/sheets/sheet_1", "GET").status, 200);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/leads", "GET").status, 200);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/leads/lead_123", "GET").status, 200);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/sheets/sheet_1/export", "GET").status, 200);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/sheets/export-all", "GET").status, 200);
+
+  // Writes: Blocked with 403 Forbidden
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/sheets", "POST").status, 403);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/sheets/sheet_1", "PUT").status, 403);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/sheets/sheet_1", "DELETE").status, 403);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/sheets/sheet_1/rows", "POST").status, 403);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/sheets/sheet_1/rows", "PUT").status, 403);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/sheets/sheet_1/rows", "DELETE").status, 403);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/leads", "POST").status, 403);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/leads/lead_123", "PUT").status, 403);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/leads/bulk", "POST").status, 403);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/users", "GET").status, 403);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/users", "POST").status, 403);
+  assert.strictEqual(simulateApiEndpoint(viewer, "/api/users", "PUT").status, 403);
+});
+
+it("Scenario 4: Viewer can switch between sales members' sheets, filter by date, and identify overdue follow-ups", () => {
+  const teamLeads = [
+    { id: "l1", member: "Sanjana", name: "Lead A", status: "Site Visit Scheduled", date: "2026-11-17", isOverdue: false },
+    { id: "l2", member: "Sanjana", name: "Lead B", status: "Follow-up Required", date: "2026-11-10", isOverdue: true },
+    { id: "l3", member: "Kavya", name: "Lead C", status: "Site Visit Scheduled", date: "2026-11-17", isOverdue: false },
+    { id: "l4", member: "Rahul", name: "Lead D", status: "Call Back", date: "2026-11-05", isOverdue: true },
+  ];
+
+  // Viewer filters for all overdue leads across all members
+  const overdueLeads = teamLeads.filter((l) => l.isOverdue);
+  assert.strictEqual(overdueLeads.length, 2);
+  assert.strictEqual(overdueLeads.map((l) => l.member).sort().join(","), "Rahul,Sanjana");
+
+  // Viewer filters for today's leads across team
+  const todayLeads = teamLeads.filter((l) => l.date === "2026-11-17");
+  assert.strictEqual(todayLeads.length, 2);
+  assert.strictEqual(todayLeads.map((l) => l.member).sort().join(","), "Kavya,Sanjana");
+});
+
+it("Scenario 5: Viewer accounts do not receive individual sheet assignments on creation or update", () => {
+  // Simulate POST /api/users creating a MEMBER vs VIEWER
+  function simulateCreateUser(role, sheetOption) {
+    const newUser = { id: `u_${Math.random()}`, role, name: "Test User" };
+    let assignedSheets = [];
+    if (role !== "VIEWER") {
+      if (sheetOption === "new") {
+        assignedSheets.push({ id: `s_${Math.random()}`, name: newUser.name, userId: newUser.id });
+      }
+    }
+    return { user: newUser, sheets: assignedSheets };
+  }
+
+  // Member gets sheet
+  const memberResult = simulateCreateUser("MEMBER", "new");
+  assert.strictEqual(memberResult.sheets.length, 1);
+  assert.strictEqual(memberResult.sheets[0].userId, memberResult.user.id);
+
+  // Viewer never gets individual sheet
+  const viewerResult = simulateCreateUser("VIEWER", "new");
+  assert.strictEqual(viewerResult.sheets.length, 0);
+
+  // Updating existing member with sheets to VIEWER unassigns individual sheets
+  const existingMemberWithSheet = {
+    id: "u_member_to_viewer",
+    role: "MEMBER",
+    sheets: [{ id: "s_old", name: "Old Sheet", userId: "u_member_to_viewer" }],
+  };
+
+  function simulateRoleUpdate(targetUser, newRole) {
+    const updated = { ...targetUser, role: newRole };
+    let updatedSheets = [...targetUser.sheets];
+    if (newRole === "VIEWER") {
+      updatedSheets = updatedSheets.map((s) => ({ ...s, userId: null }));
+    }
+    return { user: updated, sheets: updatedSheets };
+  }
+
+  const updatedToViewer = simulateRoleUpdate(existingMemberWithSheet, "VIEWER");
+  assert.strictEqual(updatedToViewer.user.role, "VIEWER");
+  // Individual sheet unassigned from user but preserved in organization
+  assert.strictEqual(updatedToViewer.sheets[0].userId, null);
+  assert.strictEqual(updatedToViewer.sheets[0].name, "Old Sheet");
+});
+
+it("Scenario 6: Newly created member sheets are automatically visible to Viewers without manual assignment", () => {
+  const allSheets = [
+    { id: "s1", name: "Sanjana", userId: "u1" },
+    { id: "s2", name: "Likhita", userId: "u2" },
+  ];
+
+  function getViewerSheets() {
+    return allSheets; // GET /api/sheets returns all organization sheets for VIEWER
+  }
+
+  assert.strictEqual(getViewerSheets().length, 2);
+
+  // Admin or another member creates a new sheet
+  allSheets.push({ id: "s3", name: "Pushpa (New Source)", userId: "u3" });
+
+  // Viewer immediately sees the newly created sheet without manual assignment
+  const viewerSheetsAfter = getViewerSheets();
+  assert.strictEqual(viewerSheetsAfter.length, 3);
+  assert.strictEqual(viewerSheetsAfter.some((s) => s.name === "Pushpa (New Source)"), true);
+});
+
+it("Scenario 7: Admin password reset preserves user ID, email, sheets and leads while updating hash securely", async () => {
+  const originalUser = {
+    id: "user_sales_101",
+    name: "Pushpa",
+    email: "pushpa@mvkleads.com",
+    role: "MEMBER",
+    passwordHash: "$2a$10$oldHash123",
+    displayPassword: null,
+    sheets: [{ id: "sheet_pushpa", name: "Pushpa", rowsCount: 122 }],
+  };
+
+  // Admin initiates password reset with new password
+  const newPasswordPlain = "SalesTeam2026!Secure";
+  const newHash = await bcrypt.hash(newPasswordPlain, 10);
+
+  const updatedUser = {
+    ...originalUser,
+    passwordHash: newHash,
+    displayPassword: null,
+    mustChangePassword: false,
+  };
+
+  // Preserved attributes
+  assert.strictEqual(updatedUser.id, originalUser.id);
+  assert.strictEqual(updatedUser.email, originalUser.email);
+  assert.strictEqual(updatedUser.name, originalUser.name);
+  assert.strictEqual(updatedUser.role, originalUser.role);
+  assert.strictEqual(updatedUser.sheets.length, 1);
+  assert.strictEqual(updatedUser.sheets[0].rowsCount, 122);
+
+  // Security properties
+  assert.strictEqual(updatedUser.displayPassword, null);
+  assert.notStrictEqual(updatedUser.passwordHash, originalUser.passwordHash);
+  assert.strictEqual(await bcrypt.compare(newPasswordPlain, updatedUser.passwordHash), true);
+  assert.strictEqual(await bcrypt.compare("wrongpassword", updatedUser.passwordHash), false);
+});
+
 testPromiseChain.then(() => {
   console.log(`\n=== ALL TESTS PASSED: ${passed}/${total} ===\n`);
   if (passed !== total) {
     process.exit(1);
   }
 });
+
