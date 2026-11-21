@@ -147,11 +147,18 @@ export async function POST(req: Request) {
   }
 }
 
-// PUT /api/sheets - Reorder sheet tabs (batch update order)
+// PUT /api/sheets - Reorder sheet tabs (batch update order - Admin only)
 export async function PUT(req: Request) {
   const user = await getSessionUser();
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  if (user.role !== "ADMIN") {
+    return NextResponse.json(
+      { error: "Forbidden: Only administrators can reorder sheet tabs." },
+      { status: 403 }
+    );
   }
 
   try {

@@ -1766,18 +1766,20 @@ export function SpreadsheetApp() {
       console.error(e);
     }
 
-    // 3. Persist order to the Neon PostgreSQL database
-    try {
-      const res = await fetch("/api/sheets", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sheetOrders: reorderedSheets.map((s) => s.id) }),
-      });
-      if (!res.ok) {
-        console.error("Failed to persist sheet order to DB");
+    // 3. Persist order to the Neon PostgreSQL database (Admin only)
+    if (user?.role === "ADMIN") {
+      try {
+        const res = await fetch("/api/sheets", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sheetOrders: reorderedSheets.map((s) => s.id) }),
+        });
+        if (!res.ok) {
+          console.error("Failed to persist sheet order to DB");
+        }
+      } catch (err) {
+        console.error("Reorder sheets DB error:", err);
       }
-    } catch (err) {
-      console.error("Reorder sheets DB error:", err);
     }
   };
 
